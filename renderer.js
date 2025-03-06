@@ -1,16 +1,16 @@
 // Add path module - needed for file operations
 const path = {
-    basename: function(p) {
+    basename: function (p) {
         return p.split('/').pop();
     },
-    join: function(dir, file) {
+    join: function (dir, file) {
         if (dir.endsWith('/')) {
             return dir + file;
         } else {
             return dir + '/' + file;
         }
     },
-    dirname: function(p) {
+    dirname: function (p) {
         return p.substring(0, p.lastIndexOf('/'));
     }
 };
@@ -86,6 +86,18 @@ function showFileManagerLoading(show) {
     }
 }
 
+// 显示/隐藏传输状态栏
+function showTransferStatus(show) {
+    const transferStatus = document.querySelector('.transfer-status');
+    if (transferStatus) {
+        if (show) {
+            transferStatus.classList.add('active');
+        } else {
+            transferStatus.classList.remove('active');
+        }
+    }
+}
+
 // 切换认证方式显示/隐藏相关字段
 function toggleAuthFields() {
     const authType = authTypeSelect.value;
@@ -148,7 +160,7 @@ function createXterm(containerId, options = {}) {
                     fitAddon.fit();
                 }, 100);
 
-                resolve({ term, fitAddon });
+                resolve({term, fitAddon});
             } catch (error) {
                 reject(error);
             }
@@ -213,9 +225,6 @@ async function initFileManager(sessionId) {
     } finally {
         // 隐藏加载状态，无论成功或失败
         showFileManagerLoading(false);
-
-        // 修复文件管理器颜色
-        fixFileManagerColors();
     }
 }
 
@@ -254,11 +263,11 @@ async function loadLocalFiles(directory) {
 
             // 使用模拟数据作为备用
             const dummyFiles = [
-                { name: '..', isDirectory: true, size: 0, modifyTime: new Date() },
-                { name: 'Documents', isDirectory: true, size: 0, modifyTime: new Date() },
-                { name: 'Downloads', isDirectory: true, size: 0, modifyTime: new Date() },
-                { name: 'example.txt', isDirectory: false, size: 1024, modifyTime: new Date() },
-                { name: 'image.jpg', isDirectory: false, size: 30720, modifyTime: new Date() }
+                {name: '..', isDirectory: true, size: 0, modifyTime: new Date()},
+                {name: 'Documents', isDirectory: true, size: 0, modifyTime: new Date()},
+                {name: 'Downloads', isDirectory: true, size: 0, modifyTime: new Date()},
+                {name: 'example.txt', isDirectory: false, size: 1024, modifyTime: new Date()},
+                {name: 'image.jpg', isDirectory: false, size: 30720, modifyTime: new Date()}
             ];
             displayLocalFiles(dummyFiles, directory);
         }
@@ -302,8 +311,8 @@ function displayLocalFiles(files, currentPath) {
         if (file.isDirectory) {
             row.addEventListener('dblclick', () => {
                 const newPath = file.name === '..' ?
-                    currentPath.substring(0, currentPath.lastIndexOf('/')) :
-                    `${currentPath}/${file.name}`;
+                    currentPath.substring(0, currentPath.lastIndexOf('/')) || currentPath.substring(0, currentPath.lastIndexOf('\\')) || '/' :
+                    `${currentPath}/${file.name}`.replace(/\/\//g, '/');
 
                 loadLocalFiles(newPath);
             });
@@ -428,7 +437,8 @@ function formatFileSize(bytes) {
 
 // 格式化日期
 function formatDate(date) {
-    return date.toLocaleString();
+    if (!date) return '-';
+    return new Date(date).toLocaleString();
 }
 
 // 格式化权限
@@ -440,7 +450,7 @@ function formatPermissions(mode) {
 // 添加防抖函数，避免快速点击引起的卡顿
 function debounce(func, wait) {
     let timeout;
-    return function(...args) {
+    return function (...args) {
         const context = this;
         clearTimeout(timeout);
         timeout = setTimeout(() => func.apply(context, args), wait);
@@ -462,7 +472,10 @@ async function uploadFile(localFilePath, remotePath) {
     }
 
     try {
-        // 显示进度条
+        // 显示传输状态栏
+        showTransferStatus(true);
+
+        // 设置进度条
         const progressBar = document.getElementById('transfer-progress-bar');
         const transferInfo = document.getElementById('transfer-info');
 
@@ -484,15 +497,20 @@ async function uploadFile(localFilePath, remotePath) {
 
             setTimeout(() => {
                 progressBar.style.width = '0%';
-                transferInfo.textContent = '';
+                showTransferStatus(false);
             }, 3000);
         } else {
             alert(`上传失败: ${result.error}`);
             transferInfo.textContent = '上传失败';
+
+            setTimeout(() => {
+                showTransferStatus(false);
+            }, 3000);
         }
     } catch (error) {
         console.error('上传文件失败:', error);
         alert(`上传文件失败: ${error.message}`);
+        showTransferStatus(false);
     }
 }
 
@@ -516,7 +534,10 @@ async function downloadFile(remotePath, localFilePath) {
             localFilePath = path.join(result.directoryPath, fileName);
         }
 
-        // 显示进度条
+        // 显示传输状态栏
+        showTransferStatus(true);
+
+        // 设置进度条
         const progressBar = document.getElementById('transfer-progress-bar');
         const transferInfo = document.getElementById('transfer-info');
 
@@ -538,15 +559,88 @@ async function downloadFile(remotePath, localFilePath) {
 
             setTimeout(() => {
                 progressBar.style.width = '0%';
-                transferInfo.textContent = '';
+                showTransferStatus(false);
             }, 3000);
         } else {
             alert(`下载失败: ${result.error}`);
             transferInfo.textContent = '下载失败';
+
+            setTimeout(() => {
+                showTransferStatus(false);
+            }, 3000);
         }
     } catch (error) {
         console.error('下载文件失败:', error);
         alert(`下载文件失败: ${error.message}`);
+        showTransferStatus(false);
+    }
+}
+
+// 删除远程文件
+async function deleteRemoteFile(filePath) {
+    if (!currentSessionId) {
+        alert('请先连接到服务器');
+        return;
+    }
+
+    if (!confirm(`确定要删除文件 "${path.basename(filePath)}" 吗？此操作不可恢复！`)) {
+        return;
+    }
+
+    try {
+        showFileManagerLoading(true);
+
+        // 执行删除命令
+        const result = await window.api.ssh.execute(currentSessionId, `rm -f "${filePath}"`);
+
+        if (result.success) {
+            // 刷新远程文件列表
+            const remotePathInput = document.getElementById('remote-path');
+            if (remotePathInput) {
+                await loadRemoteFiles(remotePathInput.value);
+            }
+        } else {
+            alert(`删除文件失败: ${result.error || '未知错误'}`);
+        }
+    } catch (error) {
+        console.error('删除远程文件失败:', error);
+        alert(`删除文件失败: ${error.message}`);
+    } finally {
+        showFileManagerLoading(false);
+    }
+}
+
+// 删除远程目录
+async function deleteRemoteDirectory(dirPath) {
+    if (!currentSessionId) {
+        alert('请先连接到服务器');
+        return;
+    }
+
+    if (!confirm(`确定要删除目录 "${path.basename(dirPath)}" 及其所有内容吗？此操作不可恢复！`)) {
+        return;
+    }
+
+    try {
+        showFileManagerLoading(true);
+
+        // 执行删除命令
+        const result = await window.api.ssh.execute(currentSessionId, `rm -rf "${dirPath}"`);
+
+        if (result.success) {
+            // 刷新远程文件列表
+            const remotePathInput = document.getElementById('remote-path');
+            if (remotePathInput) {
+                await loadRemoteFiles(remotePathInput.value);
+            }
+        } else {
+            alert(`删除目录失败: ${result.error || '未知错误'}`);
+        }
+    } catch (error) {
+        console.error('删除远程目录失败:', error);
+        alert(`删除目录失败: ${error.message}`);
+    } finally {
+        showFileManagerLoading(false);
     }
 }
 
@@ -556,43 +650,63 @@ function setupFileTransferListeners() {
     const remoteFilesTable = document.getElementById('remote-files');
 
     if (remoteFilesTable) {
-        remoteFilesTable.addEventListener('contextmenu', function(e) {
+        remoteFilesTable.addEventListener('contextmenu', function (e) {
             // 检查是否点击在文件行上
             const row = e.target.closest('tr');
             if (!row) return;
 
-            // 不处理目录
-            if (row.classList.contains('directory')) return;
-
-            // 文件名和路径
-            const fileName = row.querySelector('td:first-child').textContent.trim();
+            // 获取文件名和路径
+            const fileName = row.querySelector('td:first-child').textContent.trim().replace(/^.+\s/, '');
             const remotePath = document.getElementById('remote-path').value;
             const fullPath = remotePath === '/' ? `/${fileName}` : `${remotePath}/${fileName}`;
 
-            // 创建右键菜单
+            // 跳过上级目录
+            if (fileName === '..') return;
+
+            // 根据是否为目录创建不同的菜单
             e.preventDefault();
-            showContextMenu(e.clientX, e.clientY, [
-                {
-                    label: '下载文件',
-                    action: () => downloadFile(fullPath)
-                }
-            ]);
+
+            if (row.classList.contains('directory')) {
+                showContextMenu(e.clientX, e.clientY, [
+                    {
+                        label: '删除目录',
+                        action: () => deleteRemoteDirectory(fullPath),
+                        className: 'delete'
+                    }
+                ]);
+            } else {
+                showContextMenu(e.clientX, e.clientY, [
+                    {
+                        label: '下载文件',
+                        action: () => downloadFile(fullPath),
+                        className: 'download'
+                    },
+                    {
+                        label: '删除文件',
+                        action: () => deleteRemoteFile(fullPath),
+                        className: 'delete'
+                    }
+                ]);
+            }
         });
     }
 
     const localFilesTable = document.getElementById('local-files');
 
     if (localFilesTable) {
-        localFilesTable.addEventListener('contextmenu', function(e) {
+        localFilesTable.addEventListener('contextmenu', function (e) {
             // 检查是否点击在文件行上
             const row = e.target.closest('tr');
             if (!row) return;
+
+            // 跳过上级目录
+            const fileName = row.querySelector('td:first-child').textContent.trim().replace(/^.+\s/, '');
+            if (fileName === '..') return;
 
             // 不处理目录
             if (row.classList.contains('directory')) return;
 
             // 文件名和路径
-            const fileName = row.querySelector('td:first-child').textContent.trim();
             const localPath = document.getElementById('local-path').value;
             const fullPath = path.join(localPath, fileName);
 
@@ -604,7 +718,8 @@ function setupFileTransferListeners() {
             showContextMenu(e.clientX, e.clientY, [
                 {
                     label: '上传文件',
-                    action: () => uploadFile(fullPath, remoteFilePath)
+                    action: () => uploadFile(fullPath, remoteFilePath),
+                    className: 'upload'
                 }
             ]);
         });
@@ -625,11 +740,11 @@ function showContextMenu(x, y, items) {
     menu.style.position = 'fixed';
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;
-    menu.style.backgroundColor = 'white';
-    menu.style.border = '1px solid #ddd';
+    menu.style.backgroundColor = '#252526';
+    menu.style.border = '1px solid #444';
     menu.style.borderRadius = '4px';
     menu.style.padding = '5px 0';
-    menu.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
+    menu.style.boxShadow = '0 2px 5px rgba(0,0,0,0.3)';
     menu.style.zIndex = '1000';
 
     // 添加菜单项
@@ -638,7 +753,11 @@ function showContextMenu(x, y, items) {
         menuItem.textContent = item.label;
         menuItem.style.padding = '8px 12px';
         menuItem.style.cursor = 'pointer';
-        menuItem.style.hover = 'background-color: #f5f5f5';
+        menuItem.style.color = '#e0e0e0';
+
+        if (item.className) {
+            menuItem.classList.add(item.className);
+        }
 
         menuItem.addEventListener('click', () => {
             document.body.removeChild(menu);
@@ -778,53 +897,57 @@ const terminalCSS = `
 const menuCSS = `
 #context-menu {
     position: fixed;
-    background-color: white;
-    border: 1px solid #ddd;
+    background-color: #252526;
+    border: 1px solid #444;
     border-radius: 4px;
     padding: 5px 0;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
     z-index: 1000;
 }
 
 #context-menu div {
     padding: 8px 12px;
     cursor: pointer;
+    color: #e0e0e0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 #context-menu div:hover {
-    background-color: #f5f5f5;
+    background-color: #3e3e3e;
+}
+
+#context-menu div.download::before {
+    content: "";
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23e0e0e0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4'/%3E%3Cpolyline points='7 10 12 15 17 10'/%3E%3Cline x1='12' y1='15' x2='12' y2='3'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+#context-menu div.upload::before {
+    content: "";
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23e0e0e0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4'/%3E%3Cpolyline points='17 8 12 3 7 8'/%3E%3Cline x1='12' y1='3' x2='12' y2='15'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+#context-menu div.delete::before {
+    content: "";
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23e0e0e0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3 6 5 6 21 6'/%3E%3Cpath d='M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2'/%3E%3Cline x1='10' y1='11' x2='10' y2='17'/%3E%3Cline x1='14' y1='11' x2='14' y2='17'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
 }
 `;
-
-// 添加文件管理器颜色修复函数
-function fixFileManagerColors() {
-    // 创建样式元素
-    const style = document.createElement('style');
-    style.id = 'file-manager-color-fix'; // 设置ID，避免重复添加
-    style.textContent = `
-    /* 修复文本和背景颜色 */
-    .file-list { color: #f0f0f0 !important; }
-    .file-list th { background-color: #2d2d2d !important; color: #e0e0e0 !important; }
-    .file-list td { color: #f0f0f0 !important; }
-    .directory td:first-child { color: #4d90fe !important; }
-    .path-input { background-color: #2d2d2d !important; color: #e0e0e0 !important; }
-    
-    /* 背景色修复 */
-    #file-manager-tab, .file-list-container { background-color: #1e1e1e !important; }
-    .pane-header { background-color: #2d2d2d !important; color: #e0e0e0 !important; }
-    
-    /* 悬停效果 */
-    .file-list tr:hover { background-color: #333 !important; }
-  `;
-
-    // 检查是否已存在该样式
-    const existingStyle = document.getElementById('file-manager-color-fix');
-    if (existingStyle) {
-        existingStyle.textContent = style.textContent;
-    } else {
-        document.head.appendChild(style);
-    }
-}
 
 // 额外CSS修复
 const extraCSS = `
@@ -870,7 +993,6 @@ body, html, .app-container, .main-content, .tab-content, .tab-pane, .terminal-vi
     background-color: #1e1e1e;
 }
 `;
-
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     // 添加自定义样式
@@ -918,7 +1040,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 标签切换 (添加防抖处理)
     tabs.forEach(tab => {
-        tab.addEventListener('click', debounce(function() {
+        tab.addEventListener('click', debounce(function () {
             const tabId = tab.getAttribute('data-tab');
 
             // 避免重复切换到同一个标签
@@ -948,8 +1070,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 延迟一点初始化，确保UI更新完成
                 setTimeout(() => {
                     initFileManager(currentSessionId);
-                    // 应用颜色修复
-                    fixFileManagerColors();
                 }, 100);
             }
 
@@ -1027,7 +1147,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentSessionId = result.sessionId;
 
                 // 如果不保存密码，则从保存的连接信息中清除密码
-                const savedConnectionDetails = { ...connectionDetails };
+                const savedConnectionDetails = {...connectionDetails};
                 if (!savePassword) {
                     if (authType === 'password') {
                         savedConnectionDetails.password = '';
@@ -1101,7 +1221,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 远程路径导航按钮
     const goRemotePathBtn = document.getElementById('go-remote-path');
     if (goRemotePathBtn) {
-        goRemotePathBtn.addEventListener('click', function() {
+        goRemotePathBtn.addEventListener('click', function () {
             const path = document.getElementById('remote-path').value;
             if (path) {
                 // 防止重复点击
@@ -1116,7 +1236,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 本地刷新按钮
     const localRefreshBtn = document.getElementById('local-refresh');
     if (localRefreshBtn) {
-        localRefreshBtn.addEventListener('click', function() {
+        localRefreshBtn.addEventListener('click', function () {
             const path = document.getElementById('local-path').value;
             if (path) {
                 // 防止重复点击
@@ -1131,7 +1251,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 远程刷新按钮
     const remoteRefreshBtn = document.getElementById('remote-refresh');
     if (remoteRefreshBtn) {
-        remoteRefreshBtn.addEventListener('click', function() {
+        remoteRefreshBtn.addEventListener('click', function () {
             const path = document.getElementById('remote-path').value;
             if (path) {
                 // 防止重复点击
@@ -1143,8 +1263,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 应用文件管理器颜色修复
-    fixFileManagerColors();
+    // 初始化时隐藏传输状态栏
+    showTransferStatus(false);
 });
 
 // 设置SSH数据处理
@@ -1226,6 +1346,13 @@ async function loadConnections() {
                   </div>
                 `;
 
+                // 添加双击事件
+                item.addEventListener('dblclick', () => {
+                    if (!isActive) {
+                        connectToSaved(connection.id);
+                    }
+                });
+
                 connectionList.appendChild(item);
             });
         } else {
@@ -1248,7 +1375,7 @@ async function initSimpleTerminal(sessionId) {
         container.innerHTML = '';
 
         // 使用动态加载xterm.js的方式创建终端
-        const { term, fitAddon } = await createXterm('terminal-container');
+        const {term, fitAddon} = await createXterm('terminal-container');
         activeTerminal = term;
 
         // 存储fitAddon供全局使用
@@ -1276,7 +1403,7 @@ async function initSimpleTerminal(sessionId) {
             if (fitAddon) fitAddon.fit();
         }, 100);
 
-        return { term, fitAddon };
+        return {term, fitAddon};
     } catch (error) {
         console.error('初始化终端失败:', error);
         throw error;
@@ -1300,10 +1427,38 @@ function createTerminalTab(sessionId) {
   `;
 
     tabsContainer.appendChild(tab);
+
+    // 为关闭按钮添加事件监听
+    const closeBtn = tab.querySelector('.close-tab');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', async function () {
+            try {
+                await window.api.ssh.disconnect(sessionId);
+                activeTerminal = null;
+                currentSessionId = null;
+                window.terminalFitAddon = null;
+
+                const terminalContainer = document.getElementById('terminal-container');
+                if (terminalContainer) {
+                    terminalContainer.innerHTML = '';
+                }
+
+                const placeholder = document.getElementById('terminal-placeholder');
+                if (placeholder) {
+                    placeholder.classList.remove('hidden');
+                }
+
+                updateConnectionStatus(false);
+                await loadConnections();
+            } catch (error) {
+                console.error('断开连接失败:', error);
+            }
+        });
+    }
 }
 
 // 添加连接项点击事件委托
-document.addEventListener('click', async function(event) {
+document.addEventListener('click', async function (event) {
     // 删除连接按钮 (必须放在连接项处理前)
     if (event.target.closest('.delete-connection')) {
         const btn = event.target.closest('.delete-connection');
@@ -1324,57 +1479,6 @@ document.addEventListener('click', async function(event) {
 
         event.stopPropagation();  // 阻止事件冒泡，不触发连接项的事件
         return;
-    }
-
-    // 关闭终端
-    if (event.target.closest('.close-tab')) {
-        const closeBtn = event.target.closest('.close-tab');
-        const sessionId = closeBtn.getAttribute('data-session-id');
-
-        if (sessionId) {
-            try {
-                await window.api.ssh.disconnect(sessionId);
-                activeTerminal = null;
-                currentSessionId = null;
-                window.terminalFitAddon = null;
-
-                const terminalContainer = document.getElementById('terminal-container');
-                if (terminalContainer) {
-                    terminalContainer.innerHTML = '';
-                }
-
-                const placeholder = document.getElementById('terminal-placeholder');
-                if (placeholder) {
-                    placeholder.classList.remove('hidden');
-                }
-
-                updateConnectionStatus(false);
-
-                // 更新连接列表状态
-                await loadConnections();
-            } catch (error) {
-                console.error('断开连接失败:', error);
-            }
-        }
-
-        event.stopPropagation();
-        return;
-    }
-});
-
-// 添加双击事件监听，实现双击连接
-document.addEventListener('dblclick', async function(event) {
-    if (event.target.closest('.connection-item')) {
-        // 如果已经在连接中，则忽略
-        if (isConnecting) return;
-
-        const item = event.target.closest('.connection-item');
-        const id = item.getAttribute('data-id');
-        const isActive = item.getAttribute('data-active') === 'true';
-
-        if (!isActive) {
-            await connectToSaved(id);
-        }
     }
 });
 
@@ -1434,8 +1538,3 @@ async function connectToSaved(id) {
         removeLoadingOverlay();
     }
 }
-
-// 确保页面加载完成后应用文件管理器样式
-window.addEventListener('load', () => {
-    setTimeout(fixFileManagerColors, 500);
-});
