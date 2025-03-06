@@ -1,0 +1,41 @@
+<div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="app-logo">快速SSH</div>
+      <button id="toggle-sidebar" class="icon-button">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 18l-6-6 6-6"/>
+        </svg>
+      </button>
+    </div>
+    
+    <button id="new-connection-btn" class="primary-button">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 5v14M5 12h14"/>
+      </svg>
+      <span>新建连接</span>
+    </button>
+    
+    <div class="search-box">
+      <input type="text" id="connection-search" placeholder="搜索连接...">
+    </div>
+    
+    <div class="connection-list" id="connection-list">
+      <% if (connections && connections.length > 0) { %>
+        <% connections.forEach(function(connection) { %>
+          <div class="connection-item" data-id="<%= connection.id %>">
+            <div class="connection-status-indicator offline"></div>
+            <div class="connection-name"><%= connection.name %></div>
+            <div class="connection-actions">
+              <button class="icon-button delete-connection" data-id="<%= connection.id %>">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        <% }); %>
+      <% } else { %>
+        <div class="no-connections">没有保存的连接</div>
+      <% } %>
+    </div>
+  </div>

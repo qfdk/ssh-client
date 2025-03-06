@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title><%= title %></title>
+  <link rel="stylesheet" href="assets/css/main.css">
+  <link rel="stylesheet" href="node_modules/xterm/css/xterm.css">
+</head>
+<body>
+  <div class="app-container">
+    <%- include('partials/sidebar') %>
+    
+    <div class="main-content">
+      <div class="tabs">
+        <div class="tab active" data-tab="terminal">终端</div>
+        <div class="tab" data-tab="file-manager">文件管理</div>
+      </div>
+      
+      <div class="tab-content">
+        <div class="tab-pane active" id="terminal-tab">
+          <%- include('partials/terminal') %>
+        </div>
+        <div class="tab-pane" id="file-manager-tab">
+          <%- include('partials/file-manager') %>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="status-bar">
+    <div class="connection-status">
+      <span class="status-indicator offline"></span>
+      <span class="status-text">未连接</span>
+    </div>
+  </div>
+  <%- include('partials/connection-dialog') %>
+  <script src="renderer.js"></script>
+</body>
+</html>
