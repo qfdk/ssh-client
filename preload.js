@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('api', {
         disconnect: (sessionId) => ipcRenderer.invoke('ssh:disconnect', sessionId),
         execute: (sessionId, command) => ipcRenderer.invoke('ssh:execute', { sessionId, command }),
         sendData: (sessionId, data) => ipcRenderer.invoke('ssh:send-data', { sessionId, data }),
+        resize: (sessionId, cols, rows) => ipcRenderer.invoke('ssh:resize', { sessionId, cols, rows }),
         onData: (callback) => {
             const listener = (event, data) => callback(event, data);
             ipcRenderer.on('ssh:data', listener);

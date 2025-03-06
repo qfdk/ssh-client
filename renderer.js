@@ -133,13 +133,14 @@ function createXterm(containerId, options = {}) {
                 // 创建终端实例
                 const term = new Terminal({
                     cursorBlink: true,
+                    cursorStyle: 'bar',    // 设置为竖线光标
                     fontSize: 14,
-                    fontFamily: 'Menlo, monospace',
+                    fontFamily: 'monospace',
                     theme: {
-                        background: '#1e1e1e', // 确保与CSS中的.terminal-container颜色匹配
+                        background: '#1e1e1e',
                         foreground: '#f0f0f0'
                     },
-                    allowTransparency: false, // 防止透明度问题
+                    allowTransparency: false,
                     ...options
                 });
 
@@ -459,8 +460,15 @@ function debounce(func, wait) {
 
 // 手动触发终端大小调整
 function resizeTerminal() {
-    if (window.terminalFitAddon) {
+    if (window.terminalFitAddon && activeTerminal && currentSessionId) {
         window.terminalFitAddon.fit();
+
+        // 获取并发送更新的终端尺寸
+        const dimensions = window.terminalFitAddon.proposeDimensions();
+        if (dimensions && window.api && window.api.ssh) {
+            window.api.ssh.resize(currentSessionId, dimensions.cols, dimensions.rows)
+                .catch(err => console.error('调整终端大小失败:', err));
+        }
     }
 }
 
@@ -1389,6 +1397,14 @@ async function initSimpleTerminal(sessionId) {
             }
         });
 
+        // 添加大小调整处理
+        activeTerminal.onResize(size => {
+            if (window.api && window.api.ssh) {
+                window.api.ssh.resize(sessionId, size.cols, size.rows)
+                    .catch(err => console.error('调整终端大小失败:', err));
+            }
+        });
+
         // 创建标签
         createTerminalTab(sessionId);
 
@@ -1398,10 +1414,19 @@ async function initSimpleTerminal(sessionId) {
             placeholder.classList.add('hidden');
         }
 
-        // 确保终端填满空间
+        // 确保终端填满空间并发送初始终端大小
         setTimeout(() => {
-            if (fitAddon) fitAddon.fit();
-        }, 100);
+            if (fitAddon) {
+                fitAddon.fit();
+
+                // 获取并发送终端尺寸
+                const dimensions = fitAddon.proposeDimensions();
+                if (dimensions && window.api && window.api.ssh) {
+                    window.api.ssh.resize(sessionId, dimensions.cols, dimensions.rows)
+                        .catch(err => console.error('初始化调整终端大小失败:', err));
+                }
+            }
+        }, 200);
 
         return {term, fitAddon};
     } catch (error) {

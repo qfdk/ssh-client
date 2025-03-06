@@ -262,7 +262,7 @@ sshService.on('data', (sessionId, data) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
 
     try {
-        console.log('SSH数据:', sessionId, data.length);
+        // console.log('SSH数据:', sessionId, data.length);
         // 修改: 确保data是字符串格式
         const dataStr = typeof data === 'string' ? data : data.toString('utf8');
         mainWindow.webContents.send('ssh:data', {sessionId, data: dataStr});
@@ -293,5 +293,19 @@ sshService.on('close', (sessionId) => {
         mainWindow.webContents.send('ssh:closed', {sessionId});
     } catch (error) {
         console.error('处理SSH关闭事件时出错:', error);
+    }
+});
+ipcMain.handle('ssh:resize', async (event, {sessionId, cols, rows}) => {
+    console.log('调整终端大小:', sessionId, cols, rows);
+    try {
+        if (!sshService) {
+            return {success: false, error: 'SSH服务未初始化'};
+        }
+
+        await sshService.resize(sessionId, cols, rows);
+        return {success: true};
+    } catch (error) {
+        console.error('调整终端大小错误:', error);
+        return {success: false, error: error.message};
     }
 });

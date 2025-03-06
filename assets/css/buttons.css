@@ -1,0 +1,59 @@
+/* 优化新建连接按钮 */
+#new-connection-btn {
+    background-color: #3498db;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin: 12px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: all 0.2s ease;
+}
+
+#new-connection-btn:hover {
+    background-color: #2980b9;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+    transform: translateY(-1px);
+}
+
+#new-connection-btn:active {
+    background-color: #1c6ea4;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    transform: translateY(1px);
+}
+
+#new-connection-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* 改进侧边栏按钮样式 */
+#toggle-sidebar {
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+
+#toggle-sidebar:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* 更新连接列表项样式 */
+.connection-item {
+    border-radius: 6px;
+    margin-bottom: 6px;
+    transition: background-color 0.2s;
+}
+
+.connection-item:hover {
+    background-color: rgba(52, 152, 219, 0.1);
+}
+
+.connection-item[data-active="true"] {
+    background-color: rgba(52, 152, 219, 0.2);
+}

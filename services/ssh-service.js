@@ -67,7 +67,7 @@ class SshService extends EventEmitter {
                     port: connectionDetails.port || 22,
                     username: connectionDetails.username,
                     // 设置终端类型，以确保正确的shell环境
-                    term: 'xterm-256color',
+                    term: 'xterm-color', // 改为xterm-color以提高兼容性
                     // 添加连接超时设置
                     readyTimeout: 30000,
                     keepaliveInterval: 10000
@@ -118,6 +118,17 @@ class SshService extends EventEmitter {
         // 确保data是字符串格式
         const dataStr = typeof data === 'string' ? data : data.toString('utf8');
         session.stream.write(dataStr);
+        return true;
+    }
+
+    // 新增方法：调整终端大小
+    async resize(sessionId, cols, rows) {
+        const session = this.sessions.get(sessionId);
+        if (!session || !session.stream) {
+            throw new Error('会话未找到或shell未启动');
+        }
+
+        session.stream.setWindow(rows, cols, 0, 0);
         return true;
     }
 
