@@ -8,8 +8,6 @@ class SshService extends EventEmitter {
         this.sessions = new Map();
     }
 
-    // services/ssh-service.js中connect方法的修复版本
-
     async connect(connectionDetails) {
         return new Promise((resolve, reject) => {
             try {
@@ -75,7 +73,8 @@ class SshService extends EventEmitter {
                     keepaliveInterval: 10000
                 };
 
-                if (connectionDetails.privateKey) {
+                // 根据认证类型选择认证方式
+                if (connectionDetails.authType === 'privateKey' && connectionDetails.privateKey) {
                     try {
                         connectOptions.privateKey = fs.readFileSync(connectionDetails.privateKey);
                         if (connectionDetails.passphrase) {

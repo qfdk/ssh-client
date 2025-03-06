@@ -21,6 +21,14 @@ class ConfigStore {
     if (connection.id) {
       const index = connections.findIndex(c => c.id === connection.id);
       if (index !== -1) {
+        // 保存密码，如果新连接没有密码但是旧连接有密码，保留旧密码
+        if (!connection.password && connections[index].password) {
+          connection.password = connections[index].password;
+        }
+        // 同样处理私钥密码
+        if (!connection.passphrase && connections[index].passphrase) {
+          connection.passphrase = connections[index].passphrase;
+        }
         connections[index] = connection;
       } else {
         connections.push(connection);

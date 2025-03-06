@@ -4,8 +4,13 @@ const connectionDialog = document.getElementById('connection-dialog');
 const connectionForm = document.getElementById('connection-form');
 const cancelConnectionBtn = document.getElementById('cancel-connection');
 const tabs = document.querySelectorAll('.tab');
-const sidebarToggle = document.querySelector('.toggle-btn');
+const sidebarToggle = document.getElementById('toggle-sidebar');
 const sidebar = document.querySelector('.sidebar');
+const authTypeSelect = document.getElementById('auth-type');
+const passwordAuthFields = document.querySelector('.auth-password');
+const privateKeyAuthFields = document.querySelectorAll('.auth-key');
+const browsePrivateKeyBtn = document.getElementById('browse-private-key');
+const savePasswordCheckbox = document.getElementById('conn-save-password');
 
 // 全局变量
 let activeTerminal = null;
@@ -13,6 +18,19 @@ let currentSessionId = null;
 let connectionStore = new Map(); // 存储已连接的会话信息
 
 console.log('Renderer script loaded');
+
+// 切换认证方式显示/隐藏相关字段
+function toggleAuthFields() {
+    const authType = authTypeSelect.value;
+
+    if (authType === 'password') {
+        passwordAuthFields.classList.remove('hidden');
+        privateKeyAuthFields.forEach(field => field.classList.add('hidden'));
+    } else {
+        passwordAuthFields.classList.add('hidden');
+        privateKeyAuthFields.forEach(field => field.classList.remove('hidden'));
+    }
+}
 
 // 手动创建终端
 function createXterm(containerId, options = {}) {
@@ -91,6 +109,22 @@ document.addEventListener('DOMContentLoaded', () => {
         placeholder.classList.add('hidden');
     }
 
+    // 认证方式切换
+    if (authTypeSelect) {
+        authTypeSelect.addEventListener('change', toggleAuthFields);
+    }
+
+    // 浏览私钥文件
+    if (browsePrivateKeyBtn) {
+        browsePrivateKeyBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const result = await window.api.dialog.selectFile();
+            if (!result.canceled) {
+                document.getElementById('conn-private-key-path').value = result.filePath;
+            }
+        });
+    }
+
     // 标签切换
     tabs.forEach(tab => {
         tab.addEventListener('click', () => {
@@ -105,9 +139,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 侧边栏折叠/展开
-    sidebarToggle?.addEventListener('click', () => {
-        sidebar.classList.toggle('collapsed');
-    });
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', () => {
+            sidebar.classList.toggle('collapsed');
+        });
+    }
 
     // 新建连接
     newConnectionBtn?.addEventListener('click', () => {
@@ -125,13 +161,27 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
 
         try {
+            const authType = document.getElementById('auth-type').value;
+            const savePassword = document.getElementById('conn-save-password').checked;
+
             const connectionDetails = {
                 name: document.getElementById('conn-name').value,
                 host: document.getElementById('conn-host').value,
                 port: parseInt(document.getElementById('conn-port').value),
                 username: document.getElementById('conn-username').value,
-                password: document.getElementById('conn-password').value
+                authType: authType
             };
+
+            // 根据认证方式添加相应字段
+            if (authType === 'password') {
+                connectionDetails.password = document.getElementById('conn-password').value;
+            } else {
+                connectionDetails.privateKey = document.getElementById('conn-private-key-path').value;
+                const passphrase = document.getElementById('conn-passphrase').value;
+                if (passphrase) {
+                    connectionDetails.passphrase = passphrase;
+                }
+            }
 
             console.log('尝试连接...');
 
@@ -146,11 +196,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 const generatedId = Date.now().toString();
                 currentSessionId = result.sessionId;
 
+                // 如果不保存密码，则从保存的连接信息中清除密码
+                const savedConnectionDetails = { ...connectionDetails };
+                if (!savePassword) {
+                    if (authType === 'password') {
+                        savedConnectionDetails.password = '';
+                    } else if (authType === 'privateKey' && savedConnectionDetails.passphrase) {
+                        savedConnectionDetails.passphrase = '';
+                    }
+                }
+
                 const savedConnection = await window.api.config.saveConnection({
-                    ...connectionDetails,
-                    password: '',
-                    sessionId: result.sessionId,
-                    id: generatedId
+                    ...savedConnectionDetails,
+                    id: generatedId,
+                    sessionId: result.sessionId
                 });
 
                 // 更新状态
@@ -185,6 +244,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 设置SSH数据处理
     setupSSHDataHandler();
+
+    // 设置SSH连接关闭处理
+    setupSSHClosedHandler();
+
+    // 设置连接更新监听
+    if (window.api && window.api.config && window.api.config.onConnectionsUpdated) {
+        window.api.config.onConnectionsUpdated(() => {
+            loadConnections();
+        });
+    }
 });
 
 // 设置SSH数据处理
@@ -198,6 +267,34 @@ function setupSSHDataHandler() {
         if (activeTerminal && data.sessionId === currentSessionId) {
             console.log('收到数据:', data.data.length);
             activeTerminal.write(data.data);
+        }
+    });
+}
+
+// 设置SSH关闭处理
+function setupSSHClosedHandler() {
+    if (!window.api || !window.api.ssh || !window.api.ssh.onClosed) {
+        console.error('API未初始化，无法设置SSH关闭处理');
+        return;
+    }
+
+    window.api.ssh.onClosed((event, data) => {
+        if (data.sessionId === currentSessionId) {
+            activeTerminal = null;
+            currentSessionId = null;
+
+            const terminalContainer = document.getElementById('terminal-container');
+            if (terminalContainer) {
+                terminalContainer.innerHTML = '';
+            }
+
+            const placeholder = document.getElementById('terminal-placeholder');
+            if (placeholder) {
+                placeholder.classList.remove('hidden');
+            }
+
+            updateConnectionStatus(false);
+            loadConnections();
         }
     });
 }
@@ -217,21 +314,25 @@ async function loadConnections() {
 
         if (connections && connections.length > 0) {
             connections.forEach(connection => {
+                const isActive = connection.sessionId === currentSessionId;
+                const statusClass = isActive ? 'online' : 'offline';
+
                 const item = document.createElement('div');
                 item.className = 'connection-item';
                 item.setAttribute('data-id', connection.id);
+                item.setAttribute('data-active', isActive ? 'true' : 'false');
 
                 item.innerHTML = `
-          <div class="connection-status-indicator ${connection.sessionId ? 'online' : 'offline'}"></div>
-          <div class="connection-name">${connection.name}</div>
-          <div class="connection-actions">
-            <button class="icon-button delete-connection" data-id="${connection.id}">
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
-              </svg>
-            </button>
-          </div>
-        `;
+                  <div class="connection-status-indicator ${statusClass}"></div>
+                  <div class="connection-name">${connection.name}</div>
+                  <div class="connection-actions">
+                    <button class="icon-button delete-connection" data-id="${connection.id}">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                      </svg>
+                    </button>
+                  </div>
+                `;
 
                 connectionList.appendChild(item);
             });
@@ -304,7 +405,18 @@ document.addEventListener('click', async function(event) {
     if (event.target.closest('.connection-item')) {
         const item = event.target.closest('.connection-item');
         const id = item.getAttribute('data-id');
-        connectToSaved(id);
+        const isActive = item.getAttribute('data-active') === 'true';
+
+        if (isActive) {
+            // 如果连接已激活，只切换到终端标签
+            const terminalTab = document.querySelector('.tab[data-tab="terminal"]');
+            if (terminalTab) {
+                terminalTab.click();
+            }
+        } else {
+            // 否则尝试连接
+            connectToSaved(id);
+        }
     }
 
     // 点击删除按钮
@@ -350,6 +462,9 @@ document.addEventListener('click', async function(event) {
                 }
 
                 updateConnectionStatus(false);
+
+                // 更新连接列表状态
+                await loadConnections();
             } catch (error) {
                 console.error('断开连接失败:', error);
             }

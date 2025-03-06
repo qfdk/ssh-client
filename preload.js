@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('api', {
             const listener = (event, data) => callback(event, data);
             ipcRenderer.on('ssh:data', listener);
             return () => ipcRenderer.removeListener('ssh:data', listener);
+        },
+        onClosed: (callback) => {
+            const listener = (event, data) => callback(event, data);
+            ipcRenderer.on('ssh:closed', listener);
+            return () => ipcRenderer.removeListener('ssh:closed', listener);
         }
     },
     file: {
@@ -21,7 +26,12 @@ contextBridge.exposeInMainWorld('api', {
     config: {
         getConnections: () => ipcRenderer.invoke('config:get-connections'),
         saveConnection: (connection) => ipcRenderer.invoke('config:save-connection', connection),
-        deleteConnection: (id) => ipcRenderer.invoke('config:delete-connection', id)
+        deleteConnection: (id) => ipcRenderer.invoke('config:delete-connection', id),
+        onConnectionsUpdated: (callback) => {
+            const listener = () => callback();
+            ipcRenderer.on('connections:updated', listener);
+            return () => ipcRenderer.removeListener('connections:updated', listener);
+        }
     },
     dialog: {
         selectFile: () => ipcRenderer.invoke('dialog:select-file'),

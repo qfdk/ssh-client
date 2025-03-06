@@ -1,31 +1,61 @@
 <div id="connection-dialog" class="dialog hidden">
-    <div class="dialog-content">
-      <h3>新建SSH连接</h3>
-      <form id="connection-form">
-        <div class="form-group">
-          <label for="conn-name">名称</label>
-          <input type="text" id="conn-name" required>
+  <div class="dialog-content">
+    <h3>新建SSH连接</h3>
+    <form id="connection-form">
+      <div class="form-group">
+        <label for="conn-name">名称</label>
+        <input type="text" id="conn-name" required>
+      </div>
+      <div class="form-group">
+        <label for="conn-host">主机</label>
+        <input type="text" id="conn-host" required>
+      </div>
+      <div class="form-group">
+        <label for="conn-port">端口</label>
+        <input type="number" id="conn-port" value="22">
+      </div>
+      <div class="form-group">
+        <label for="conn-username">用户名</label>
+        <input type="text" id="conn-username" required>
+      </div>
+
+      <div class="form-group">
+        <label for="auth-type">认证方式</label>
+        <select id="auth-type">
+          <option value="password">密码</option>
+          <option value="privateKey">私钥</option>
+        </select>
+      </div>
+
+      <div class="form-group auth-password">
+        <label for="conn-password">密码</label>
+        <input type="password" id="conn-password">
+      </div>
+
+      <div class="form-group auth-key hidden">
+        <label for="conn-private-key">私钥文件</label>
+        <div class="file-input-group">
+          <input type="text" id="conn-private-key-path" readonly>
+          <button type="button" id="browse-private-key">浏览</button>
         </div>
-        <div class="form-group">
-          <label for="conn-host">主机</label>
-          <input type="text" id="conn-host" required>
-        </div>
-        <div class="form-group">
-          <label for="conn-port">端口</label>
-          <input type="number" id="conn-port" value="22">
-        </div>
-        <div class="form-group">
-          <label for="conn-username">用户名</label>
-          <input type="text" id="conn-username" required>
-        </div>
-        <div class="form-group">
-          <label for="conn-password">密码</label>
-          <input type="password" id="conn-password">
-        </div>
-        <div class="dialog-buttons">
-          <button type="button" id="cancel-connection">取消</button>
-          <button type="submit">连接</button>
-        </div>
-      </form>
-    </div>
+      </div>
+
+      <div class="form-group auth-key hidden">
+        <label for="conn-passphrase">私钥密码 (可选)</label>
+        <input type="password" id="conn-passphrase">
+      </div>
+
+      <div class="form-group">
+        <label for="conn-save-password">
+          <input type="checkbox" id="conn-save-password" checked>
+          保存密码
+        </label>
+      </div>
+
+      <div class="dialog-buttons">
+        <button type="button" id="cancel-connection">取消</button>
+        <button type="submit">连接</button>
+      </div>
+    </form>
   </div>
+</div>

@@ -132,8 +132,7 @@ ipcMain.handle('dialog:select-directory', async () => {
     };
 });
 
-// 确保IPC处理程序正确设置
-// IPC Handlers for SSH operations
+// SSH连接处理
 ipcMain.handle('ssh:connect', async (event, connectionDetails) => {
     console.log('收到连接请求:', connectionDetails ?
         `${connectionDetails.username}@${connectionDetails.host}:${connectionDetails.port || 22}` :
@@ -166,6 +165,20 @@ ipcMain.handle('ssh:disconnect', async (event, sessionId) => {
         }
 
         await sshService.disconnect(sessionId);
+
+        // 更新保存的连接状态
+        const connections = configStore.getConnections();
+        const updatedConnections = connections.map(conn => {
+            if (conn.sessionId === sessionId) {
+                return {...conn, sessionId: null};
+            }
+            return conn;
+        });
+
+        if (JSON.stringify(connections) !== JSON.stringify(updatedConnections)) {
+            configStore.store.set('connections', updatedConnections);
+        }
+
         return {success: true};
     } catch (error) {
         console.error('断开连接错误:', error);
@@ -224,5 +237,30 @@ sshService.on('data', (sessionId, data) => {
         mainWindow.webContents.send('ssh:data', {sessionId, data: dataStr});
     } catch (error) {
         console.error('处理SSH数据时出错:', error);
+    }
+});
+
+// 处理SSH连接关闭
+sshService.on('close', (sessionId) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    try {
+        // 更新保存的连接状态
+        const connections = configStore.getConnections();
+        const updatedConnections = connections.map(conn => {
+            if (conn.sessionId === sessionId) {
+                return {...conn, sessionId: null};
+            }
+            return conn;
+        });
+
+        if (JSON.stringify(connections) !== JSON.stringify(updatedConnections)) {
+            configStore.store.set('connections', updatedConnections);
+            mainWindow.webContents.send('connections:updated');
+        }
+
+        mainWindow.webContents.send('ssh:closed', {sessionId});
+    } catch (error) {
+        console.error('处理SSH关闭事件时出错:', error);
     }
 });
