@@ -1,7 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Expose protected methods that allow the renderer process to use
-// the ipcRenderer without exposing the entire object
+// 只暴露基本IPC通信功能
 contextBridge.exposeInMainWorld('api', {
     ssh: {
         connect: (connectionDetails) => ipcRenderer.invoke('ssh:connect', connectionDetails),
@@ -9,8 +8,9 @@ contextBridge.exposeInMainWorld('api', {
         execute: (sessionId, command) => ipcRenderer.invoke('ssh:execute', { sessionId, command }),
         sendData: (sessionId, data) => ipcRenderer.invoke('ssh:send-data', { sessionId, data }),
         onData: (callback) => {
-            ipcRenderer.on('ssh:data', callback);
-            return () => ipcRenderer.removeListener('ssh:data', callback);
+            const listener = (event, data) => callback(event, data);
+            ipcRenderer.on('ssh:data', listener);
+            return () => ipcRenderer.removeListener('ssh:data', listener);
         }
     },
     file: {

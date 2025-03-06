@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const {app, BrowserWindow, ipcMain, dialog} = require('electron');
 const path = require('path');
 const ejs = require('ejs');
 const fs = require('fs');
@@ -33,7 +33,7 @@ function createWindow() {
             title: '快速SSH客户端',
             connections: configStore.getConnections() || []
         },
-        { root: path.join(__dirname, 'views') },
+        {root: path.join(__dirname, 'views')},
         (err, html) => {
             if (err) {
                 console.error('EJS渲染错误:', err);
@@ -61,59 +61,31 @@ app.on('window-all-closed', function () {
     if (process.platform !== 'darwin') app.quit();
 });
 
-// IPC Handlers for SSH operations
-ipcMain.handle('ssh:connect', async (event, connectionDetails) => {
-    try {
-        const result = await sshService.connect(connectionDetails);
-        return { success: true, sessionId: result.sessionId };
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
-});
-
-ipcMain.handle('ssh:disconnect', async (event, sessionId) => {
-    try {
-        await sshService.disconnect(sessionId);
-        return { success: true };
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
-});
-
-ipcMain.handle('ssh:execute', async (event, { sessionId, command }) => {
-    try {
-        const result = await sshService.executeCommand(sessionId, command);
-        return { success: true, output: result };
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
-});
-
 // IPC Handlers for file operations
-ipcMain.handle('file:list', async (event, { sessionId, path }) => {
+ipcMain.handle('file:list', async (event, {sessionId, path}) => {
     try {
         const files = await sshService.listFiles(sessionId, path);
-        return { success: true, files };
+        return {success: true, files};
     } catch (error) {
-        return { success: false, error: error.message };
+        return {success: false, error: error.message};
     }
 });
 
-ipcMain.handle('file:upload', async (event, { sessionId, localPath, remotePath }) => {
+ipcMain.handle('file:upload', async (event, {sessionId, localPath, remotePath}) => {
     try {
         await sshService.uploadFile(sessionId, localPath, remotePath);
-        return { success: true };
+        return {success: true};
     } catch (error) {
-        return { success: false, error: error.message };
+        return {success: false, error: error.message};
     }
 });
 
-ipcMain.handle('file:download', async (event, { sessionId, remotePath, localPath }) => {
+ipcMain.handle('file:download', async (event, {sessionId, remotePath, localPath}) => {
     try {
         await sshService.downloadFile(sessionId, remotePath, localPath);
-        return { success: true };
+        return {success: true};
     } catch (error) {
-        return { success: false, error: error.message };
+        return {success: false, error: error.message};
     }
 });
 
@@ -136,7 +108,7 @@ ipcMain.handle('dialog:select-file', async () => {
     });
 
     if (result.canceled) {
-        return { canceled: true };
+        return {canceled: true};
     }
 
     return {
@@ -151,7 +123,7 @@ ipcMain.handle('dialog:select-directory', async () => {
     });
 
     if (result.canceled) {
-        return { canceled: true };
+        return {canceled: true};
     }
 
     return {
@@ -160,20 +132,97 @@ ipcMain.handle('dialog:select-directory', async () => {
     };
 });
 
-// 确保main.js中有这段代码
-ipcMain.handle('ssh:send-data', async (event, { sessionId, data }) => {
+// 确保IPC处理程序正确设置
+// IPC Handlers for SSH operations
+ipcMain.handle('ssh:connect', async (event, connectionDetails) => {
+    console.log('收到连接请求:', connectionDetails ?
+        `${connectionDetails.username}@${connectionDetails.host}:${connectionDetails.port || 22}` :
+        'undefined');
+
     try {
-      console.log("发送数据:", sessionId, data);
-      await sshService.sendData(sessionId, data);
-      return { success: true };
+        if (!connectionDetails) {
+            return {success: false, error: '连接详情不能为空'};
+        }
+
+        if (!sshService) {
+            console.error('SSH服务未初始化');
+            return {success: false, error: 'SSH服务未初始化'};
+        }
+
+        const result = await sshService.connect(connectionDetails);
+        console.log('连接成功, 会话ID:', result.sessionId);
+        return {success: true, sessionId: result.sessionId};
     } catch (error) {
-      console.error("发送数据失败:", error);
-      return { success: false, error: error.message };
+        console.error('SSH连接错误:', error);
+        return {success: false, error: error.message || '连接失败'};
     }
-  });
-  
-  // 添加SSH数据监听
-  sshService.on('data', (sessionId, data) => {
-    console.log("SSH数据:", sessionId, data.length);
-    mainWindow.webContents.send('ssh:data', { sessionId, data });
-  });
+});
+
+ipcMain.handle('ssh:disconnect', async (event, sessionId) => {
+    console.log('断开连接请求:', sessionId);
+    try {
+        if (!sshService) {
+            return {success: false, error: 'SSH服务未初始化'};
+        }
+
+        await sshService.disconnect(sessionId);
+        return {success: true};
+    } catch (error) {
+        console.error('断开连接错误:', error);
+        return {success: false, error: error.message};
+    }
+});
+
+ipcMain.handle('ssh:send-data', async (event, {sessionId, data}) => {
+    //console.log('发送数据:', sessionId, data);
+    try {
+        if (!sshService) {
+            return {success: false, error: 'SSH服务未初始化'};
+        }
+
+        if (!sessionId) {
+            return {success: false, error: '会话ID不能为空'};
+        }
+
+        if (data === undefined || data === null) {
+            return {success: false, error: '数据不能为空'};
+        }
+
+        // 确保data是字符串
+        const dataStr = typeof data === 'string' ? data : data.toString('utf8');
+        await sshService.sendData(sessionId, dataStr);
+        return {success: true};
+    } catch (error) {
+        console.error('发送数据错误:', error);
+        return {success: false, error: error.message};
+    }
+});
+
+ipcMain.handle('ssh:execute', async (event, {sessionId, command}) => {
+    console.log('执行命令:', sessionId, command);
+    try {
+        if (!sshService) {
+            return {success: false, error: 'SSH服务未初始化'};
+        }
+
+        const result = await sshService.executeCommand(sessionId, command);
+        return {success: true, output: result};
+    } catch (error) {
+        console.error('执行命令错误:', error);
+        return {success: false, error: error.message};
+    }
+});
+
+// 添加SSH数据监听
+sshService.on('data', (sessionId, data) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    try {
+        console.log('SSH数据:', sessionId, data.length);
+        // 修改: 确保data是字符串格式
+        const dataStr = typeof data === 'string' ? data : data.toString('utf8');
+        mainWindow.webContents.send('ssh:data', {sessionId, data: dataStr});
+    } catch (error) {
+        console.error('处理SSH数据时出错:', error);
+    }
+});
