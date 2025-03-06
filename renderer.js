@@ -11,13 +11,49 @@ const passwordAuthFields = document.querySelector('.auth-password');
 const privateKeyAuthFields = document.querySelectorAll('.auth-key');
 const browsePrivateKeyBtn = document.getElementById('browse-private-key');
 const savePasswordCheckbox = document.getElementById('conn-save-password');
+const terminalTab = document.querySelector('.tab[data-tab="terminal"]');
+const fileManagerTab = document.querySelector('.tab[data-tab="file-manager"]');
 
 // 全局变量
 let activeTerminal = null;
 let currentSessionId = null;
 let connectionStore = new Map(); // 存储已连接的会话信息
+let isConnecting = false; // 连接中状态标志
+let loadingOverlay = null; // 加载遮罩元素
 
 console.log('Renderer script loaded');
+
+// 创建加载遮罩
+function createLoadingOverlay(text = '连接中...') {
+    // 如果已存在加载遮罩，先移除
+    removeLoadingOverlay();
+
+    // 创建新的加载遮罩
+    loadingOverlay = document.createElement('div');
+    loadingOverlay.className = 'loading-overlay';
+
+    const spinner = document.createElement('div');
+    spinner.className = 'spinner';
+
+    const loadingText = document.createElement('div');
+    loadingText.className = 'loading-text';
+    loadingText.textContent = text;
+
+    loadingOverlay.appendChild(spinner);
+    loadingOverlay.appendChild(loadingText);
+
+    document.body.appendChild(loadingOverlay);
+
+    return loadingOverlay;
+}
+
+// 移除加载遮罩
+function removeLoadingOverlay() {
+    if (loadingOverlay && document.body.contains(loadingOverlay)) {
+        document.body.removeChild(loadingOverlay);
+        loadingOverlay = null;
+    }
+}
 
 // 切换认证方式显示/隐藏相关字段
 function toggleAuthFields() {
@@ -102,16 +138,251 @@ function updateConnectionStatus(connected, name = '') {
     }
 }
 
+// 初始化文件管理器
+async function initFileManager(sessionId) {
+    if (!sessionId) {
+        console.error('无法初始化文件管理器：缺少会话ID');
+        return;
+    }
+
+    try {
+        // 初始化远程文件列表
+        const remotePath = document.getElementById('remote-path').value || '/';
+        const remoteFiles = await window.api.file.list(sessionId, remotePath);
+
+        if (remoteFiles.success) {
+            displayRemoteFiles(remoteFiles.files, remotePath);
+        } else {
+            console.error('获取远程文件失败:', remoteFiles.error);
+        }
+
+        // 初始化本地文件列表 (使用用户主目录)
+        await loadLocalFiles();
+
+    } catch (error) {
+        console.error('初始化文件管理器失败:', error);
+    }
+}
+
+// 加载本地文件
+async function loadLocalFiles(directory) {
+    try {
+        // 如果没有指定目录，请求用户选择
+        if (!directory) {
+            const result = await window.api.dialog.selectDirectory();
+            if (result.canceled) {
+                return;
+            }
+            directory = result.directoryPath;
+        }
+
+        // 更新路径输入框
+        const localPathInput = document.getElementById('local-path');
+        if (localPathInput) {
+            localPathInput.value = directory;
+        }
+
+        // 这里需要主进程支持列出本地文件的功能
+        // 暂时模拟显示一些文件
+        const dummyFiles = [
+            { name: '..', isDirectory: true, size: 0, modifyTime: new Date() },
+            { name: 'Documents', isDirectory: true, size: 0, modifyTime: new Date() },
+            { name: 'Downloads', isDirectory: true, size: 0, modifyTime: new Date() },
+            { name: 'example.txt', isDirectory: false, size: 1024, modifyTime: new Date() },
+            { name: 'image.jpg', isDirectory: false, size: 30720, modifyTime: new Date() }
+        ];
+
+        displayLocalFiles(dummyFiles, directory);
+
+    } catch (error) {
+        console.error('加载本地文件失败:', error);
+    }
+}
+
+// 显示本地文件
+function displayLocalFiles(files, currentPath) {
+    const tbody = document.querySelector('#local-files tbody');
+    if (!tbody) return;
+
+    tbody.innerHTML = '';
+
+    files.forEach(file => {
+        const row = document.createElement('tr');
+        row.className = file.isDirectory ? 'directory' : 'file';
+
+        // 文件名列
+        const nameCell = document.createElement('td');
+        const icon = file.isDirectory ?
+            '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>' :
+            '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>';
+
+        nameCell.innerHTML = `<span class="file-icon">${icon}</span> ${file.name}`;
+        row.appendChild(nameCell);
+
+        // 大小列
+        const sizeCell = document.createElement('td');
+        sizeCell.textContent = file.isDirectory ? '-' : formatFileSize(file.size);
+        row.appendChild(sizeCell);
+
+        // 修改日期列
+        const dateCell = document.createElement('td');
+        dateCell.textContent = formatDate(file.modifyTime);
+        row.appendChild(dateCell);
+
+        // 添加行点击事件
+        if (file.isDirectory) {
+            row.addEventListener('dblclick', () => {
+                const newPath = file.name === '..' ?
+                    currentPath.substring(0, currentPath.lastIndexOf('/')) :
+                    `${currentPath}/${file.name}`;
+
+                loadLocalFiles(newPath);
+            });
+        }
+
+        tbody.appendChild(row);
+    });
+}
+
+// 显示远程文件
+function displayRemoteFiles(files, currentPath) {
+    const tbody = document.querySelector('#remote-files tbody');
+    if (!tbody) return;
+
+    tbody.innerHTML = '';
+
+    // 添加返回上级目录的条目
+    if (currentPath !== '/') {
+        const parentRow = document.createElement('tr');
+        parentRow.className = 'directory';
+
+        // 文件名列
+        const nameCell = document.createElement('td');
+        nameCell.innerHTML = '<span class="file-icon"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></span> ..';
+        parentRow.appendChild(nameCell);
+
+        // 空列
+        for (let i = 0; i < 3; i++) {
+            const cell = document.createElement('td');
+            cell.textContent = '-';
+            parentRow.appendChild(cell);
+        }
+
+        parentRow.addEventListener('dblclick', () => {
+            const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+            loadRemoteFiles(parentPath);
+        });
+
+        tbody.appendChild(parentRow);
+    }
+
+    files.forEach(file => {
+        const row = document.createElement('tr');
+        row.className = file.isDirectory ? 'directory' : 'file';
+
+        // 文件名列
+        const nameCell = document.createElement('td');
+        const icon = file.isDirectory ?
+            '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>' :
+            '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>';
+
+        nameCell.innerHTML = `<span class="file-icon">${icon}</span> ${file.name}`;
+        row.appendChild(nameCell);
+
+        // 大小列
+        const sizeCell = document.createElement('td');
+        sizeCell.textContent = file.isDirectory ? '-' : formatFileSize(file.size);
+        row.appendChild(sizeCell);
+
+        // 修改日期列
+        const dateCell = document.createElement('td');
+        dateCell.textContent = formatDate(file.modifyTime);
+        row.appendChild(dateCell);
+
+        // 权限列
+        const permCell = document.createElement('td');
+        permCell.textContent = formatPermissions(file.permissions);
+        row.appendChild(permCell);
+
+        // 添加行点击事件
+        if (file.isDirectory) {
+            row.addEventListener('dblclick', () => {
+                const newPath = `${currentPath === '/' ? '' : currentPath}/${file.name}`;
+                loadRemoteFiles(newPath);
+            });
+        }
+
+        tbody.appendChild(row);
+    });
+}
+
+// 加载远程文件
+async function loadRemoteFiles(path) {
+    if (!currentSessionId) {
+        console.error('无法加载远程文件：未连接到服务器');
+        return;
+    }
+
+    try {
+        // 更新路径输入框
+        const remotePathInput = document.getElementById('remote-path');
+        if (remotePathInput) {
+            remotePathInput.value = path;
+        }
+
+        const result = await window.api.file.list(currentSessionId, path);
+        if (result.success) {
+            displayRemoteFiles(result.files, path);
+        } else {
+            console.error('获取远程文件失败:', result.error);
+        }
+    } catch (error) {
+        console.error('加载远程文件失败:', error);
+    }
+}
+
+// 格式化文件大小
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+
+    return (bytes / Math.pow(1024, i)).toFixed(2) + ' ' + units[i];
+}
+
+// 格式化日期
+function formatDate(date) {
+    return date.toLocaleString();
+}
+
+// 格式化权限
+function formatPermissions(mode) {
+    // 简单实现，实际应根据需求定制
+    return mode ? mode.toString(8).slice(-3) : '-';
+}
+
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
+    // 添加自定义样式
+    const customStyle = document.createElement('style');
+    customStyle.textContent = `
+      /* 初始化时隐藏终端选项卡内容 */
+      #terminal-tab:not(.active) {
+        display: none;
+      }
+    `;
+    document.head.appendChild(customStyle);
+
     const placeholder = document.getElementById('terminal-placeholder');
     if (placeholder) {
-        placeholder.classList.add('hidden');
+        placeholder.classList.remove('hidden');
     }
 
     // 认证方式切换
     if (authTypeSelect) {
         authTypeSelect.addEventListener('change', toggleAuthFields);
+        toggleAuthFields(); // 初始设置
     }
 
     // 浏览私钥文件
@@ -130,11 +401,22 @@ document.addEventListener('DOMContentLoaded', () => {
         tab.addEventListener('click', () => {
             const tabId = tab.getAttribute('data-tab');
 
+            // 只有连接成功后才能切换到终端或文件管理
+            if ((tabId === 'terminal' || tabId === 'file-manager') && !currentSessionId) {
+                alert('请先连接到服务器');
+                return;
+            }
+
             tabs.forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
 
             tab.classList.add('active');
             document.getElementById(`${tabId}-tab`).classList.add('active');
+
+            // 如果切换到文件管理，初始化文件列表
+            if (tabId === 'file-manager' && currentSessionId) {
+                initFileManager(currentSessionId);
+            }
         });
     });
 
@@ -160,7 +442,13 @@ document.addEventListener('DOMContentLoaded', () => {
     connectionForm?.addEventListener('submit', async (e) => {
         e.preventDefault();
 
+        // 如果已经在连接中，则忽略
+        if (isConnecting) return;
+
         try {
+            isConnecting = true;
+            createLoadingOverlay('正在连接服务器...');
+
             const authType = document.getElementById('auth-type').value;
             const savePassword = document.getElementById('conn-save-password').checked;
 
@@ -220,13 +508,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 connectionForm.reset();
 
                 // 初始化终端
-                initSimpleTerminal(result.sessionId);
+                await initSimpleTerminal(result.sessionId);
 
                 // 更新连接列表
                 await loadConnections();
 
                 // 切换到终端标签
-                const terminalTab = document.querySelector('.tab[data-tab="terminal"]');
                 if (terminalTab) {
                     terminalTab.click();
                 }
@@ -236,6 +523,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('连接错误:', error);
             alert(`连接错误: ${error.message}`);
+        } finally {
+            isConnecting = false;
+            removeLoadingOverlay();
         }
     });
 
@@ -254,6 +544,47 @@ document.addEventListener('DOMContentLoaded', () => {
             loadConnections();
         });
     }
+
+    // 本地文件浏览按钮
+    const browseLocalBtn = document.getElementById('browse-local');
+    if (browseLocalBtn) {
+        browseLocalBtn.addEventListener('click', () => {
+            loadLocalFiles();
+        });
+    }
+
+    // 远程路径导航按钮
+    const goRemotePathBtn = document.getElementById('go-remote-path');
+    if (goRemotePathBtn) {
+        goRemotePathBtn.addEventListener('click', () => {
+            const path = document.getElementById('remote-path').value;
+            if (path) {
+                loadRemoteFiles(path);
+            }
+        });
+    }
+
+    // 本地刷新按钮
+    const localRefreshBtn = document.getElementById('local-refresh');
+    if (localRefreshBtn) {
+        localRefreshBtn.addEventListener('click', () => {
+            const path = document.getElementById('local-path').value;
+            if (path) {
+                loadLocalFiles(path);
+            }
+        });
+    }
+
+    // 远程刷新按钮
+    const remoteRefreshBtn = document.getElementById('remote-refresh');
+    if (remoteRefreshBtn) {
+        remoteRefreshBtn.addEventListener('click', () => {
+            const path = document.getElementById('remote-path').value;
+            if (path) {
+                loadRemoteFiles(path);
+            }
+        });
+    }
 });
 
 // 设置SSH数据处理
@@ -265,7 +596,7 @@ function setupSSHDataHandler() {
 
     window.api.ssh.onData((event, data) => {
         if (activeTerminal && data.sessionId === currentSessionId) {
-            console.log('收到数据:', data.data.length);
+            //console.log('收到数据:', data.data.length);
             activeTerminal.write(data.data);
         }
     });
@@ -375,8 +706,11 @@ async function initSimpleTerminal(sessionId) {
         if (placeholder) {
             placeholder.classList.add('hidden');
         }
+
+        return { term };
     } catch (error) {
         console.error('初始化终端失败:', error);
+        throw error;
     }
 }
 
@@ -401,25 +735,7 @@ function createTerminalTab(sessionId) {
 
 // 添加连接项点击事件委托
 document.addEventListener('click', async function(event) {
-    // 点击连接项
-    if (event.target.closest('.connection-item')) {
-        const item = event.target.closest('.connection-item');
-        const id = item.getAttribute('data-id');
-        const isActive = item.getAttribute('data-active') === 'true';
-
-        if (isActive) {
-            // 如果连接已激活，只切换到终端标签
-            const terminalTab = document.querySelector('.tab[data-tab="terminal"]');
-            if (terminalTab) {
-                terminalTab.click();
-            }
-        } else {
-            // 否则尝试连接
-            connectToSaved(id);
-        }
-    }
-
-    // 点击删除按钮
+    // 删除连接按钮 (必须放在连接项处理前)
     if (event.target.closest('.delete-connection')) {
         const btn = event.target.closest('.delete-connection');
         const id = btn.getAttribute('data-id');
@@ -437,10 +753,11 @@ document.addEventListener('click', async function(event) {
             console.error('删除连接失败:', error);
         }
 
-        event.stopPropagation();
+        event.stopPropagation();  // 阻止事件冒泡，不触发连接项的事件
+        return;
     }
 
-    // 点击关闭终端
+    // 关闭终端
     if (event.target.closest('.close-tab')) {
         const closeBtn = event.target.closest('.close-tab');
         const sessionId = closeBtn.getAttribute('data-session-id');
@@ -469,12 +786,37 @@ document.addEventListener('click', async function(event) {
                 console.error('断开连接失败:', error);
             }
         }
+
+        event.stopPropagation();
+        return;
+    }
+});
+
+// 添加双击事件监听，实现双击连接
+document.addEventListener('dblclick', async function(event) {
+    if (event.target.closest('.connection-item')) {
+        // 如果已经在连接中，则忽略
+        if (isConnecting) return;
+
+        const item = event.target.closest('.connection-item');
+        const id = item.getAttribute('data-id');
+        const isActive = item.getAttribute('data-active') === 'true';
+
+        if (!isActive) {
+            await connectToSaved(id);
+        }
     }
 });
 
 // 连接到已保存的服务器
 async function connectToSaved(id) {
+    // 如果已经在连接中，则忽略
+    if (isConnecting) return;
+
     try {
+        isConnecting = true;
+        createLoadingOverlay('正在连接服务器...');
+
         if (!window.api) {
             alert('API未初始化，请重启应用');
             return;
@@ -499,7 +841,7 @@ async function connectToSaved(id) {
             });
 
             // 初始化终端
-            initSimpleTerminal(result.sessionId);
+            await initSimpleTerminal(result.sessionId);
 
             // 更新状态
             updateConnectionStatus(true, connection.name);
@@ -508,7 +850,6 @@ async function connectToSaved(id) {
             await loadConnections();
 
             // 切换到终端标签
-            const terminalTab = document.querySelector('.tab[data-tab="terminal"]');
             if (terminalTab) {
                 terminalTab.click();
             }
@@ -518,5 +859,8 @@ async function connectToSaved(id) {
     } catch (error) {
         console.error('连接错误:', error);
         alert(`连接错误: ${error.message}`);
+    } finally {
+        isConnecting = false;
+        removeLoadingOverlay();
     }
 }
