@@ -71,6 +71,37 @@ ipcMain.handle('file:list', async (event, {sessionId, path}) => {
     }
 });
 
+// Add this to your existing IPC handlers
+ipcMain.handle('file:list-local', async (event, directory) => {
+    try {
+        const files = fs.readdirSync(directory);
+        const fileDetails = files.map(file => {
+            const filePath = path.join(directory, file);
+            const stats = fs.statSync(filePath);
+            return {
+                name: file,
+                isDirectory: stats.isDirectory(),
+                size: stats.size,
+                modifyTime: stats.mtime
+            };
+        });
+
+        // Add parent directory entry if not at root
+        if (path.dirname(directory) !== directory) {
+            fileDetails.unshift({
+                name: '..',
+                isDirectory: true,
+                size: 0,
+                modifyTime: new Date()
+            });
+        }
+
+        return {success: true, files: fileDetails};
+    } catch (error) {
+        return {success: false, error: error.message};
+    }
+});
+
 ipcMain.handle('file:upload', async (event, {sessionId, localPath, remotePath}) => {
     try {
         await sshService.uploadFile(sessionId, localPath, remotePath);

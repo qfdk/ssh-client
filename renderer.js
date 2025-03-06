@@ -1,3 +1,20 @@
+// Add path module - needed for file operations
+const path = {
+    basename: function(p) {
+        return p.split('/').pop();
+    },
+    join: function(dir, file) {
+        if (dir.endsWith('/')) {
+            return dir + file;
+        } else {
+            return dir + '/' + file;
+        }
+    },
+    dirname: function(p) {
+        return p.substring(0, p.lastIndexOf('/'));
+    }
+};
+
 // DOM元素
 const newConnectionBtn = document.getElementById('new-connection-btn');
 const connectionDialog = document.getElementById('connection-dialog');
@@ -20,6 +37,8 @@ let currentSessionId = null;
 let connectionStore = new Map(); // 存储已连接的会话信息
 let isConnecting = false; // 连接中状态标志
 let loadingOverlay = null; // 加载遮罩元素
+let lastLocalDirectory = null; // 记住上次的本地目录
+let fileManagerInitialized = false; // 文件管理器是否已初始化
 
 console.log('Renderer script loaded');
 
@@ -105,9 +124,10 @@ function createXterm(containerId, options = {}) {
                     fontSize: 14,
                     fontFamily: 'Menlo, monospace',
                     theme: {
-                        background: '#1e1e1e',
+                        background: '#1e1e1e', // 确保与CSS中的.terminal-container颜色匹配
                         foreground: '#f0f0f0'
                     },
+                    allowTransparency: false, // 防止透明度问题
                     ...options
                 });
 
@@ -117,6 +137,16 @@ function createXterm(containerId, options = {}) {
 
                 term.open(container);
                 fitAddon.fit();
+
+                // 添加窗口大小变化事件监听
+                window.addEventListener('resize', () => {
+                    fitAddon.fit();
+                });
+
+                // 强制延迟重新调整大小，确保正确渲染
+                setTimeout(() => {
+                    fitAddon.fit();
+                }, 100);
 
                 resolve({ term, fitAddon });
             } catch (error) {
@@ -172,21 +202,32 @@ async function initFileManager(sessionId) {
             console.error('获取远程文件失败:', remoteFiles.error);
         }
 
-        // 初始化本地文件列表 (使用用户主目录)
-        await loadLocalFiles();
+        // 只有在首次初始化时才加载本地文件
+        if (!fileManagerInitialized) {
+            await loadLocalFiles();
+            fileManagerInitialized = true;
+        }
 
     } catch (error) {
         console.error('初始化文件管理器失败:', error);
     } finally {
         // 隐藏加载状态，无论成功或失败
         showFileManagerLoading(false);
+
+        // 修复文件管理器颜色
+        fixFileManagerColors();
     }
 }
 
 // 加载本地文件
 async function loadLocalFiles(directory) {
     try {
-        // 如果没有指定目录，请求用户选择
+        // 如果没有指定目录且有上次使用的目录，使用上次的目录
+        if (!directory && lastLocalDirectory) {
+            directory = lastLocalDirectory;
+        }
+
+        // 只有在没有目录时才请求用户选择
         if (!directory) {
             const result = await window.api.dialog.selectDirectory();
             if (result.canceled) {
@@ -195,23 +236,32 @@ async function loadLocalFiles(directory) {
             directory = result.directoryPath;
         }
 
+        // 记住这个目录供下次使用
+        lastLocalDirectory = directory;
+
         // 更新路径输入框
         const localPathInput = document.getElementById('local-path');
         if (localPathInput) {
             localPathInput.value = directory;
         }
 
-        // 这里需要主进程支持列出本地文件的功能
-        // 暂时模拟显示一些文件
-        const dummyFiles = [
-            { name: '..', isDirectory: true, size: 0, modifyTime: new Date() },
-            { name: 'Documents', isDirectory: true, size: 0, modifyTime: new Date() },
-            { name: 'Downloads', isDirectory: true, size: 0, modifyTime: new Date() },
-            { name: 'example.txt', isDirectory: false, size: 1024, modifyTime: new Date() },
-            { name: 'image.jpg', isDirectory: false, size: 30720, modifyTime: new Date() }
-        ];
+        // 使用真实文件列表API代替模拟数据
+        const result = await window.api.file.listLocal(directory);
+        if (result && result.success) {
+            displayLocalFiles(result.files, directory);
+        } else {
+            console.error('获取本地文件失败:', result ? result.error : '未知错误');
 
-        displayLocalFiles(dummyFiles, directory);
+            // 使用模拟数据作为备用
+            const dummyFiles = [
+                { name: '..', isDirectory: true, size: 0, modifyTime: new Date() },
+                { name: 'Documents', isDirectory: true, size: 0, modifyTime: new Date() },
+                { name: 'Downloads', isDirectory: true, size: 0, modifyTime: new Date() },
+                { name: 'example.txt', isDirectory: false, size: 1024, modifyTime: new Date() },
+                { name: 'image.jpg', isDirectory: false, size: 30720, modifyTime: new Date() }
+            ];
+            displayLocalFiles(dummyFiles, directory);
+        }
 
     } catch (error) {
         console.error('加载本地文件失败:', error);
@@ -397,6 +447,430 @@ function debounce(func, wait) {
     };
 }
 
+// 手动触发终端大小调整
+function resizeTerminal() {
+    if (window.terminalFitAddon) {
+        window.terminalFitAddon.fit();
+    }
+}
+
+// 上传文件
+async function uploadFile(localFilePath, remotePath) {
+    if (!currentSessionId) {
+        alert('请先连接到服务器');
+        return;
+    }
+
+    try {
+        // 显示进度条
+        const progressBar = document.getElementById('transfer-progress-bar');
+        const transferInfo = document.getElementById('transfer-info');
+
+        progressBar.style.width = '0%';
+        transferInfo.textContent = `正在上传: ${path.basename(localFilePath)}`;
+
+        const result = await window.api.file.upload(currentSessionId, localFilePath, remotePath);
+
+        if (result.success) {
+            // 上传成功，更新远程文件列表
+            progressBar.style.width = '100%';
+            transferInfo.textContent = '上传完成';
+
+            // 刷新远程文件列表
+            const remotePathInput = document.getElementById('remote-path');
+            if (remotePathInput) {
+                loadRemoteFiles(remotePathInput.value);
+            }
+
+            setTimeout(() => {
+                progressBar.style.width = '0%';
+                transferInfo.textContent = '';
+            }, 3000);
+        } else {
+            alert(`上传失败: ${result.error}`);
+            transferInfo.textContent = '上传失败';
+        }
+    } catch (error) {
+        console.error('上传文件失败:', error);
+        alert(`上传文件失败: ${error.message}`);
+    }
+}
+
+// 下载文件
+async function downloadFile(remotePath, localFilePath) {
+    if (!currentSessionId) {
+        alert('请先连接到服务器');
+        return;
+    }
+
+    try {
+        // 如果未指定本地路径，请求用户选择保存位置
+        if (!localFilePath) {
+            const result = await window.api.dialog.selectDirectory();
+            if (result.canceled) {
+                return;
+            }
+
+            // 拼接完整路径（目录+文件名）
+            const fileName = path.basename(remotePath);
+            localFilePath = path.join(result.directoryPath, fileName);
+        }
+
+        // 显示进度条
+        const progressBar = document.getElementById('transfer-progress-bar');
+        const transferInfo = document.getElementById('transfer-info');
+
+        progressBar.style.width = '0%';
+        transferInfo.textContent = `正在下载: ${path.basename(remotePath)}`;
+
+        const result = await window.api.file.download(currentSessionId, remotePath, localFilePath);
+
+        if (result.success) {
+            // 下载成功
+            progressBar.style.width = '100%';
+            transferInfo.textContent = '下载完成';
+
+            // 刷新本地文件列表
+            const localPathInput = document.getElementById('local-path');
+            if (localPathInput && localPathInput.value) {
+                loadLocalFiles(localPathInput.value);
+            }
+
+            setTimeout(() => {
+                progressBar.style.width = '0%';
+                transferInfo.textContent = '';
+            }, 3000);
+        } else {
+            alert(`下载失败: ${result.error}`);
+            transferInfo.textContent = '下载失败';
+        }
+    } catch (error) {
+        console.error('下载文件失败:', error);
+        alert(`下载文件失败: ${error.message}`);
+    }
+}
+
+// 添加文件传输按钮监听
+function setupFileTransferListeners() {
+    // 右键菜单处理
+    const remoteFilesTable = document.getElementById('remote-files');
+
+    if (remoteFilesTable) {
+        remoteFilesTable.addEventListener('contextmenu', function(e) {
+            // 检查是否点击在文件行上
+            const row = e.target.closest('tr');
+            if (!row) return;
+
+            // 不处理目录
+            if (row.classList.contains('directory')) return;
+
+            // 文件名和路径
+            const fileName = row.querySelector('td:first-child').textContent.trim();
+            const remotePath = document.getElementById('remote-path').value;
+            const fullPath = remotePath === '/' ? `/${fileName}` : `${remotePath}/${fileName}`;
+
+            // 创建右键菜单
+            e.preventDefault();
+            showContextMenu(e.clientX, e.clientY, [
+                {
+                    label: '下载文件',
+                    action: () => downloadFile(fullPath)
+                }
+            ]);
+        });
+    }
+
+    const localFilesTable = document.getElementById('local-files');
+
+    if (localFilesTable) {
+        localFilesTable.addEventListener('contextmenu', function(e) {
+            // 检查是否点击在文件行上
+            const row = e.target.closest('tr');
+            if (!row) return;
+
+            // 不处理目录
+            if (row.classList.contains('directory')) return;
+
+            // 文件名和路径
+            const fileName = row.querySelector('td:first-child').textContent.trim();
+            const localPath = document.getElementById('local-path').value;
+            const fullPath = path.join(localPath, fileName);
+
+            const remotePath = document.getElementById('remote-path').value;
+            const remoteFilePath = remotePath === '/' ? `/${fileName}` : `${remotePath}/${fileName}`;
+
+            // 创建右键菜单
+            e.preventDefault();
+            showContextMenu(e.clientX, e.clientY, [
+                {
+                    label: '上传文件',
+                    action: () => uploadFile(fullPath, remoteFilePath)
+                }
+            ]);
+        });
+    }
+}
+
+// 显示上下文菜单
+function showContextMenu(x, y, items) {
+    // 删除任何现有菜单
+    const oldMenu = document.getElementById('context-menu');
+    if (oldMenu) {
+        document.body.removeChild(oldMenu);
+    }
+
+    // 创建新菜单
+    const menu = document.createElement('div');
+    menu.id = 'context-menu';
+    menu.style.position = 'fixed';
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    menu.style.backgroundColor = 'white';
+    menu.style.border = '1px solid #ddd';
+    menu.style.borderRadius = '4px';
+    menu.style.padding = '5px 0';
+    menu.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
+    menu.style.zIndex = '1000';
+
+    // 添加菜单项
+    items.forEach(item => {
+        const menuItem = document.createElement('div');
+        menuItem.textContent = item.label;
+        menuItem.style.padding = '8px 12px';
+        menuItem.style.cursor = 'pointer';
+        menuItem.style.hover = 'background-color: #f5f5f5';
+
+        menuItem.addEventListener('click', () => {
+            document.body.removeChild(menu);
+            item.action();
+        });
+
+        menu.appendChild(menuItem);
+    });
+
+    // 添加到文档
+    document.body.appendChild(menu);
+
+    // 点击其他地方关闭菜单
+    document.addEventListener('click', function closeMenu() {
+        if (document.body.contains(menu)) {
+            document.body.removeChild(menu);
+        }
+        document.removeEventListener('click', closeMenu);
+    });
+}
+
+// 终端相关CSS
+const terminalCSS = `
+.terminal-view {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background-color: #1e1e1e;
+    color: #f0f0f0;
+    overflow: hidden;
+}
+
+.terminal-content {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0; /* Critical for proper flex sizing */
+    display: flex; /* Ensure it fills space */
+}
+
+.terminal-container {
+    width: 100%;
+    height: 100%;
+    background-color: #1e1e1e !important;
+    flex: 1; /* Fill available space */
+    display: flex;
+    flex-direction: column;
+}
+
+.terminal-container .xterm {
+    height: 100%;
+    flex: 1;
+}
+
+/* Fix terminal layers */
+.terminal-container .xterm-screen,
+.terminal-container .xterm-viewport {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Remove absolute positioning causing overlays */
+.terminal-placeholder {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #1e1e1e;
+    z-index: 10;
+}
+
+/* Hide overlays */
+.terminal-content > div:not(#terminal-container):not(#terminal-placeholder) {
+    display: none !important;
+}
+
+/* Terminal tab style fixes */
+.terminal-tabs {
+    background-color: #252526;
+    padding: 4px 4px 0;
+    border-bottom: 1px solid #333;
+}
+
+.terminal-tab {
+    background-color: #2d2d2d;
+    color: #ccc;
+    border-radius: 4px 4px 0 0;
+    padding: 6px 12px;
+    font-size: 13px;
+}
+
+.terminal-tab.active {
+    background-color: #1e1e1e;
+    color: #fff;
+}
+
+/* Remove any padding in the terminal that might cause gray spaces */
+.tab-pane.active {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+}
+
+/* Fix the app-container height */
+.app-container {
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* Ensure main-content is properly sized */
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Fix tab-content height */
+.tab-content {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+`;
+
+// 右键菜单样式
+const menuCSS = `
+#context-menu {
+    position: fixed;
+    background-color: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 5px 0;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    z-index: 1000;
+}
+
+#context-menu div {
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
+#context-menu div:hover {
+    background-color: #f5f5f5;
+}
+`;
+
+// 添加文件管理器颜色修复函数
+function fixFileManagerColors() {
+    // 创建样式元素
+    const style = document.createElement('style');
+    style.id = 'file-manager-color-fix'; // 设置ID，避免重复添加
+    style.textContent = `
+    /* 修复文本和背景颜色 */
+    .file-list { color: #f0f0f0 !important; }
+    .file-list th { background-color: #2d2d2d !important; color: #e0e0e0 !important; }
+    .file-list td { color: #f0f0f0 !important; }
+    .directory td:first-child { color: #4d90fe !important; }
+    .path-input { background-color: #2d2d2d !important; color: #e0e0e0 !important; }
+    
+    /* 背景色修复 */
+    #file-manager-tab, .file-list-container { background-color: #1e1e1e !important; }
+    .pane-header { background-color: #2d2d2d !important; color: #e0e0e0 !important; }
+    
+    /* 悬停效果 */
+    .file-list tr:hover { background-color: #333 !important; }
+  `;
+
+    // 检查是否已存在该样式
+    const existingStyle = document.getElementById('file-manager-color-fix');
+    if (existingStyle) {
+        existingStyle.textContent = style.textContent;
+    } else {
+        document.head.appendChild(style);
+    }
+}
+
+// 额外CSS修复
+const extraCSS = `
+/* Fix xterm sizing */
+.xterm {
+    padding: 0;
+    margin: 0;
+}
+
+/* Remove scrollbar padding */
+.xterm-viewport::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.xterm-viewport::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 5px;
+}
+
+/* Fix terminal fullscreen issue */
+#terminal-tab {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+}
+
+/* Override any potential padding from parent elements */
+.tab-pane#terminal-tab {
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+/* Remove gray background */
+body, html, .app-container, .main-content, .tab-content, .tab-pane, .terminal-view, .terminal-content, .terminal-container {
+    background-color: #1e1e1e;
+}
+`;
+
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     // 添加自定义样式
@@ -406,6 +880,14 @@ document.addEventListener('DOMContentLoaded', () => {
       #terminal-tab:not(.active) {
         display: none;
       }
+      /* 确保终端容器和终端背景颜色一致 */
+      .terminal-container, .terminal-container .terminal {
+        background-color: #1e1e1e !important;
+      }
+      
+      ${terminalCSS}
+      ${menuCSS}
+      ${extraCSS}
     `;
     document.head.appendChild(customStyle);
 
@@ -466,7 +948,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 延迟一点初始化，确保UI更新完成
                 setTimeout(() => {
                     initFileManager(currentSessionId);
+                    // 应用颜色修复
+                    fixFileManagerColors();
                 }, 100);
+            }
+
+            // 如果切换到终端标签，调整终端大小
+            if (tabId === 'terminal' && activeTerminal) {
+                setTimeout(resizeTerminal, 50);
             }
         }, 300)); // 添加300ms的防抖延迟
     });
@@ -475,6 +964,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sidebarToggle) {
         sidebarToggle.addEventListener('click', () => {
             sidebar.classList.toggle('collapsed');
+            // 侧边栏变化后调整终端大小
+            setTimeout(resizeTerminal, 300);
         });
     }
 
@@ -589,6 +1080,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // 设置SSH连接关闭处理
     setupSSHClosedHandler();
 
+    // 设置文件传输监听
+    setupFileTransferListeners();
+
     // 设置连接更新监听
     if (window.api && window.api.config && window.api.config.onConnectionsUpdated) {
         window.api.config.onConnectionsUpdated(() => {
@@ -648,6 +1142,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // 应用文件管理器颜色修复
+    fixFileManagerColors();
 });
 
 // 设置SSH数据处理
@@ -676,6 +1173,7 @@ function setupSSHClosedHandler() {
         if (data.sessionId === currentSessionId) {
             activeTerminal = null;
             currentSessionId = null;
+            window.terminalFitAddon = null;
 
             const terminalContainer = document.getElementById('terminal-container');
             if (terminalContainer) {
@@ -750,8 +1248,11 @@ async function initSimpleTerminal(sessionId) {
         container.innerHTML = '';
 
         // 使用动态加载xterm.js的方式创建终端
-        const { term } = await createXterm('terminal-container');
+        const { term, fitAddon } = await createXterm('terminal-container');
         activeTerminal = term;
+
+        // 存储fitAddon供全局使用
+        window.terminalFitAddon = fitAddon;
 
         // 终端接收输入并发送
         activeTerminal.onData(data => {
@@ -770,7 +1271,12 @@ async function initSimpleTerminal(sessionId) {
             placeholder.classList.add('hidden');
         }
 
-        return { term };
+        // 确保终端填满空间
+        setTimeout(() => {
+            if (fitAddon) fitAddon.fit();
+        }, 100);
+
+        return { term, fitAddon };
     } catch (error) {
         console.error('初始化终端失败:', error);
         throw error;
@@ -830,6 +1336,7 @@ document.addEventListener('click', async function(event) {
                 await window.api.ssh.disconnect(sessionId);
                 activeTerminal = null;
                 currentSessionId = null;
+                window.terminalFitAddon = null;
 
                 const terminalContainer = document.getElementById('terminal-container');
                 if (terminalContainer) {
@@ -927,3 +1434,8 @@ async function connectToSaved(id) {
         removeLoadingOverlay();
     }
 }
+
+// 确保页面加载完成后应用文件管理器样式
+window.addEventListener('load', () => {
+    setTimeout(fixFileManagerColors, 500);
+});
