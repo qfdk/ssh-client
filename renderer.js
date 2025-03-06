@@ -55,6 +55,18 @@ function removeLoadingOverlay() {
     }
 }
 
+// 显示/隐藏文件管理器加载状态
+function showFileManagerLoading(show) {
+    const loadingOverlay = document.getElementById('file-manager-loading');
+    if (loadingOverlay) {
+        if (show) {
+            loadingOverlay.classList.remove('hidden');
+        } else {
+            loadingOverlay.classList.add('hidden');
+        }
+    }
+}
+
 // 切换认证方式显示/隐藏相关字段
 function toggleAuthFields() {
     const authType = authTypeSelect.value;
@@ -142,10 +154,14 @@ function updateConnectionStatus(connected, name = '') {
 async function initFileManager(sessionId) {
     if (!sessionId) {
         console.error('无法初始化文件管理器：缺少会话ID');
+        showFileManagerLoading(false);
         return;
     }
 
     try {
+        // 显示加载状态
+        showFileManagerLoading(true);
+
         // 初始化远程文件列表
         const remotePath = document.getElementById('remote-path').value || '/';
         const remoteFiles = await window.api.file.list(sessionId, remotePath);
@@ -161,6 +177,9 @@ async function initFileManager(sessionId) {
 
     } catch (error) {
         console.error('初始化文件管理器失败:', error);
+    } finally {
+        // 隐藏加载状态，无论成功或失败
+        showFileManagerLoading(false);
     }
 }
 
@@ -324,6 +343,9 @@ async function loadRemoteFiles(path) {
     }
 
     try {
+        // 显示加载状态
+        showFileManagerLoading(true);
+
         // 更新路径输入框
         const remotePathInput = document.getElementById('remote-path');
         if (remotePathInput) {
@@ -338,6 +360,9 @@ async function loadRemoteFiles(path) {
         }
     } catch (error) {
         console.error('加载远程文件失败:', error);
+    } finally {
+        // 隐藏加载状态
+        showFileManagerLoading(false);
     }
 }
 
@@ -360,6 +385,16 @@ function formatDate(date) {
 function formatPermissions(mode) {
     // 简单实现，实际应根据需求定制
     return mode ? mode.toString(8).slice(-3) : '-';
+}
+
+// 添加防抖函数，避免快速点击引起的卡顿
+function debounce(func, wait) {
+    let timeout;
+    return function(...args) {
+        const context = this;
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(context, args), wait);
+    };
 }
 
 // 初始化
@@ -396,10 +431,18 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 标签切换
+    // 当前活动标签
+    let activeTabId = 'terminal';
+
+    // 标签切换 (添加防抖处理)
     tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
+        tab.addEventListener('click', debounce(function() {
             const tabId = tab.getAttribute('data-tab');
+
+            // 避免重复切换到同一个标签
+            if (tabId === activeTabId) {
+                return;
+            }
 
             // 只有连接成功后才能切换到终端或文件管理
             if ((tabId === 'terminal' || tabId === 'file-manager') && !currentSessionId) {
@@ -413,11 +456,19 @@ document.addEventListener('DOMContentLoaded', () => {
             tab.classList.add('active');
             document.getElementById(`${tabId}-tab`).classList.add('active');
 
+            // 更新当前活动标签
+            activeTabId = tabId;
+
             // 如果切换到文件管理，初始化文件列表
             if (tabId === 'file-manager' && currentSessionId) {
-                initFileManager(currentSessionId);
+                // 显示文件管理器的加载中状态
+                showFileManagerLoading(true);
+                // 延迟一点初始化，确保UI更新完成
+                setTimeout(() => {
+                    initFileManager(currentSessionId);
+                }, 100);
             }
-        });
+        }, 300)); // 添加300ms的防抖延迟
     });
 
     // 侧边栏折叠/展开
@@ -556,10 +607,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // 远程路径导航按钮
     const goRemotePathBtn = document.getElementById('go-remote-path');
     if (goRemotePathBtn) {
-        goRemotePathBtn.addEventListener('click', () => {
+        goRemotePathBtn.addEventListener('click', function() {
             const path = document.getElementById('remote-path').value;
             if (path) {
-                loadRemoteFiles(path);
+                // 防止重复点击
+                this.disabled = true;
+                loadRemoteFiles(path).finally(() => {
+                    this.disabled = false;
+                });
             }
         });
     }
@@ -567,10 +622,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // 本地刷新按钮
     const localRefreshBtn = document.getElementById('local-refresh');
     if (localRefreshBtn) {
-        localRefreshBtn.addEventListener('click', () => {
+        localRefreshBtn.addEventListener('click', function() {
             const path = document.getElementById('local-path').value;
             if (path) {
-                loadLocalFiles(path);
+                // 防止重复点击
+                this.disabled = true;
+                loadLocalFiles(path).finally(() => {
+                    this.disabled = false;
+                });
             }
         });
     }
@@ -578,10 +637,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // 远程刷新按钮
     const remoteRefreshBtn = document.getElementById('remote-refresh');
     if (remoteRefreshBtn) {
-        remoteRefreshBtn.addEventListener('click', () => {
+        remoteRefreshBtn.addEventListener('click', function() {
             const path = document.getElementById('remote-path').value;
             if (path) {
-                loadRemoteFiles(path);
+                // 防止重复点击
+                this.disabled = true;
+                loadRemoteFiles(path).finally(() => {
+                    this.disabled = false;
+                });
             }
         });
     }

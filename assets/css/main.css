@@ -309,6 +309,7 @@ body {
   height: 100%;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .split-pane {
@@ -934,6 +935,17 @@ input[type="checkbox"] {
   flex-direction: column;
 }
 
+/* 文件管理器的加载覆盖层样式 */
+#file-manager-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+}
+
 .spinner {
   width: 40px;
   height: 40px;
@@ -951,18 +963,6 @@ input[type="checkbox"] {
   color: white;
   margin-top: 10px;
   font-size: 14px;
-}
-
-/* 改进保存密码复选框 */
-.checkbox-container {
-  display: flex;
-  align-items: center;
-}
-
-#conn-save-password {
-  margin-right: 8px;
-  width: 16px;
-  height: 16px;
 }
 
 /* 文件列表样式改进 */

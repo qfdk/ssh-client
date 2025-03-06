@@ -1,79 +1,85 @@
 <div class="file-manager">
-    <div class="split-pane">
-      <div class="pane local-pane">
-        <div class="pane-header">
-          <span>本地文件</span>
-          <button id="local-refresh" class="icon-button">
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M1 4v6h6"/>
-              <path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
-            </svg>
-          </button>
-        </div>
-        <div class="path-bar">
-          <input type="text" id="local-path" class="path-input" readonly>
-          <button id="browse-local" class="icon-button">
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-            </svg>
-          </button>
-        </div>
-        <div class="file-list-container">
-          <table class="file-list" id="local-files">
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>大小</th>
-                <th>修改日期</th>
-              </tr>
-            </thead>
-            <tbody>
-              <!-- Files will be added dynamically -->
-            </tbody>
-          </table>
-        </div>
+  <!-- File Manager Loading Overlay -->
+  <div id="file-manager-loading" class="loading-overlay hidden">
+    <div class="spinner"></div>
+    <div class="loading-text">正在加载文件...</div>
+  </div>
+
+  <div class="split-pane">
+    <div class="pane local-pane">
+      <div class="pane-header">
+        <span>本地文件</span>
+        <button id="local-refresh" class="icon-button">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 4v6h6"/>
+            <path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+          </svg>
+        </button>
       </div>
-      
-      <div class="pane remote-pane">
-        <div class="pane-header">
-          <span>远程文件</span>
-          <button id="remote-refresh" class="icon-button">
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M1 4v6h6"/>
-              <path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
-            </svg>
-          </button>
-        </div>
-        <div class="path-bar">
-          <input type="text" id="remote-path" class="path-input" value="/">
-          <button id="go-remote-path" class="icon-button">
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="9 18 15 12 9 6"/>
-            </svg>
-          </button>
-        </div>
-        <div class="file-list-container">
-          <table class="file-list" id="remote-files">
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>大小</th>
-                <th>修改日期</th>
-                <th>权限</th>
-              </tr>
-            </thead>
-            <tbody>
-              <!-- Files will be added dynamically -->
-            </tbody>
-          </table>
-        </div>
+      <div class="path-bar">
+        <input type="text" id="local-path" class="path-input" readonly>
+        <button id="browse-local" class="icon-button">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="file-list-container">
+        <table class="file-list" id="local-files">
+          <thead>
+          <tr>
+            <th>名称</th>
+            <th>大小</th>
+            <th>修改日期</th>
+          </tr>
+          </thead>
+          <tbody>
+          <!-- Files will be added dynamically -->
+          </tbody>
+        </table>
       </div>
     </div>
-    
-    <div class="transfer-status">
-      <div class="transfer-progress">
-        <div class="progress-bar" id="transfer-progress-bar"></div>
+
+    <div class="pane remote-pane">
+      <div class="pane-header">
+        <span>远程文件</span>
+        <button id="remote-refresh" class="icon-button">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 4v6h6"/>
+            <path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+          </svg>
+        </button>
       </div>
-      <div class="transfer-info" id="transfer-info"></div>
+      <div class="path-bar">
+        <input type="text" id="remote-path" class="path-input" value="/">
+        <button id="go-remote-path" class="icon-button">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
+      </div>
+      <div class="file-list-container">
+        <table class="file-list" id="remote-files">
+          <thead>
+          <tr>
+            <th>名称</th>
+            <th>大小</th>
+            <th>修改日期</th>
+            <th>权限</th>
+          </tr>
+          </thead>
+          <tbody>
+          <!-- Files will be added dynamically -->
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
+
+  <div class="transfer-status">
+    <div class="transfer-progress">
+      <div class="progress-bar" id="transfer-progress-bar"></div>
+    </div>
+    <div class="transfer-info" id="transfer-info"></div>
+  </div>
+</div>
