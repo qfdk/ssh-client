@@ -1,24 +1,24 @@
 <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <div class="app-logo">快速SSH</div>
+      <div class="app-logo">SSHL</div>
       <button id="toggle-sidebar" class="icon-button">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M15 18l-6-6 6-6"/>
         </svg>
       </button>
     </div>
-    
+
     <button id="new-connection-btn" class="primary-button">
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 5v14M5 12h14"/>
       </svg>
       <span>新建连接</span>
     </button>
-    
+
     <div class="search-box">
       <input type="text" id="connection-search" placeholder="搜索连接...">
     </div>
-    
+
     <div class="connection-list" id="connection-list">
       <% if (connections && connections.length > 0) { %>
         <% connections.forEach(function(connection) { %>

@@ -30,7 +30,7 @@ function createWindow() {
     ejs.renderFile(
         path.join(__dirname, 'views', 'index.ejs'),
         {
-            title: '快速SSH客户端',
+            title: 'SSHL客户端',
             connections: configStore.getConnections() || []
         },
         {root: path.join(__dirname, 'views')},
