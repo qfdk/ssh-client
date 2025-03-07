@@ -232,18 +232,20 @@ async function initFileManager(sessionId) {
 // 加载本地文件
 async function loadLocalFiles(directory) {
     try {
-        // 如果没有指定目录且有上次使用的目录，使用上次的目录
-        if (!directory && lastLocalDirectory) {
-            directory = lastLocalDirectory;
-        }
-
-        // 只有在没有目录时才请求用户选择
+        // 如果没有指定目录，则始终请求用户选择新的目录
         if (!directory) {
             const result = await window.api.dialog.selectDirectory();
             if (result.canceled) {
-                return;
+                // 如果用户取消了选择，但之前有使用过的目录，继续使用上一次的目录
+                if (lastLocalDirectory) {
+                    directory = lastLocalDirectory;
+                } else {
+                    // 如果之前没有使用过目录，则退出函数
+                    return;
+                }
+            } else {
+                directory = result.directoryPath;
             }
-            directory = result.directoryPath;
         }
 
         // 记住这个目录供下次使用
@@ -255,7 +257,7 @@ async function loadLocalFiles(directory) {
             localPathInput.value = directory;
         }
 
-        // 使用真实文件列表API代替模拟数据
+        // 使用真实文件列表API获取文件
         const result = await window.api.file.listLocal(directory);
         if (result && result.success) {
             displayLocalFiles(result.files, directory);
@@ -1221,8 +1223,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // 本地文件浏览按钮
     const browseLocalBtn = document.getElementById('browse-local');
     if (browseLocalBtn) {
-        browseLocalBtn.addEventListener('click', () => {
-            loadLocalFiles();
+        browseLocalBtn.addEventListener('click', async () => {
+            await loadLocalFiles(null);
         });
     }
 

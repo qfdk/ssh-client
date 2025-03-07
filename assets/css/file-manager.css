@@ -2,8 +2,8 @@
 
 /* Properly themed file manager */
 .file-manager {
-    background-color: #1e1e1e;
-    color: #e0e0e0;
+    background-color: white;
+    color: var(--text-dark);
 }
 
 /* Split pane styling */
@@ -15,18 +15,18 @@
 }
 
 .pane {
-    background-color: #252526;
-    border: 1px solid #333;
+    background-color: white;
+    border: 1px solid var(--border-color);
     border-radius: 6px;
     overflow: hidden;
 }
 
 /* Header styling */
 .pane-header {
-    background-color: #333;
-    color: #e0e0e0;
+    background-color: #f9fafb;
+    color: var(--text-dark);
     padding: 10px 12px;
-    border-bottom: 1px solid #444;
+    border-bottom: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -36,23 +36,24 @@
 .path-bar {
     display: flex;
     padding: 8px;
-    border-bottom: 1px solid #444;
-    background-color: #2d2d2d;
+    border-bottom: 1px solid var(--border-color);
+    background-color: white;
 }
 
 .path-input {
     flex: 1;
-    background-color: #3c3c3c;
-    color: #e0e0e0;
-    border: 1px solid #555;
+    background-color: white;
+    color: var(--text-dark);
+    border: 1px solid var(--border-color);
     border-radius: 4px;
     padding: 6px 10px;
     font-size: 13px;
 }
 
 .path-input:focus {
-    border-color: #0078d7;
+    border-color: var(--primary-color);
     outline: none;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 /* File list container */
@@ -68,40 +69,40 @@
 }
 
 .file-list th {
-    background-color: #2d2d2d;
-    color: #e0e0e0;
+    background-color: #f9fafb;
+    color: var(--text-dark);
     text-align: left;
     padding: 8px 12px;
     font-weight: 500;
     position: sticky;
     top: 0;
     z-index: 1;
-    border-bottom: 1px solid #444;
+    border-bottom: 1px solid var(--border-color);
 }
 
 .file-list td {
     padding: 6px 12px;
-    border-bottom: 1px solid #444;
-    color: #e0e0e0;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-dark);
 }
 
 .file-list tr.directory td:first-child {
-    color: #4d90fe;
+    color: var(--primary-color);
 }
 
 .file-list tr.file td:first-child {
-    color: #e0e0e0;
+    color: var(--text-dark);
 }
 
 .file-list tr:hover {
-    background-color: #3e3e3e;
+    background-color: #f3f4f6;
 }
 
 /* Button styling */
 .icon-button {
     background-color: transparent;
     border: none;
-    color: #e0e0e0;
+    color: var(--text-dark);
     cursor: pointer;
     padding: 6px;
     border-radius: 4px;
@@ -111,7 +112,7 @@
 }
 
 .icon-button:hover {
-    background-color: rgba(255, 255, 255, 0.1);
+    background-color: rgba(0, 0, 0, 0.05);
 }
 
 /* Transfer status bar - hidden by default */
@@ -120,8 +121,8 @@
     display: flex;
     align-items: center;
     padding: 0 12px;
-    background-color: #2d2d2d;
-    border-top: 1px solid #444;
+    background-color: #f9fafb;
+    border-top: 1px solid var(--border-color);
     display: none; /* Hidden by default */
 }
 
@@ -132,7 +133,7 @@
 .transfer-progress {
     width: 200px;
     height: 8px;
-    background-color: #444;
+    background-color: #e5e7eb;
     border-radius: 4px;
     overflow: hidden;
     margin-right: 12px;
@@ -140,35 +141,35 @@
 
 .progress-bar {
     height: 100%;
-    background-color: #0078d7;
+    background-color: var(--primary-color);
     width: 0;
     transition: width 0.3s;
 }
 
 .transfer-info {
     font-size: 12px;
-    color: #e0e0e0;
+    color: var(--secondary-color);
 }
 
 /* Context menu styling */
 #context-menu {
-    background-color: #252526;
-    border: 1px solid #444;
+    background-color: white;
+    border: 1px solid var(--border-color);
     border-radius: 4px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
 }
 
 #context-menu div {
     padding: 8px 12px;
     cursor: pointer;
-    color: #e0e0e0;
+    color: var(--text-dark);
     display: flex;
     align-items: center;
     gap: 8px;
 }
 
 #context-menu div:hover {
-    background-color: #3e3e3e;
+    background-color: #f3f4f6;
 }
 
 /* Add icons to context menu items */
@@ -177,7 +178,7 @@
     display: inline-block;
     width: 16px;
     height: 16px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23e0e0e0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4'/%3E%3Cpolyline points='7 10 12 15 17 10'/%3E%3Cline x1='12' y1='15' x2='12' y2='3'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23374151' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4'/%3E%3Cpolyline points='7 10 12 15 17 10'/%3E%3Cline x1='12' y1='15' x2='12' y2='3'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: center;
 }
@@ -187,7 +188,7 @@
     display: inline-block;
     width: 16px;
     height: 16px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23e0e0e0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4'/%3E%3Cpolyline points='17 8 12 3 7 8'/%3E%3Cline x1='12' y1='3' x2='12' y2='15'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23374151' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4'/%3E%3Cpolyline points='17 8 12 3 7 8'/%3E%3Cline x1='12' y1='3' x2='12' y2='15'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: center;
 }
@@ -197,7 +198,7 @@
     display: inline-block;
     width: 16px;
     height: 16px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23e0e0e0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3 6 5 6 21 6'/%3E%3Cpath d='M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2'/%3E%3Cline x1='10' y1='11' x2='10' y2='17'/%3E%3Cline x1='14' y1='11' x2='14' y2='17'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23374151' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3 6 5 6 21 6'/%3E%3Cpath d='M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2'/%3E%3Cline x1='10' y1='11' x2='10' y2='17'/%3E%3Cline x1='14' y1='11' x2='14' y2='17'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: center;
 }
@@ -209,14 +210,14 @@
 }
 
 .file-list-container::-webkit-scrollbar-track {
-    background: #252526;
+    background: #f9fafb;
 }
 
 .file-list-container::-webkit-scrollbar-thumb {
-    background: #666;
+    background: #d1d5db;
     border-radius: 5px;
 }
 
 .file-list-container::-webkit-scrollbar-thumb:hover {
-    background: #888;
+    background: #9ca3af;
 }
