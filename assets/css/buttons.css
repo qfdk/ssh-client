@@ -72,3 +72,51 @@
 .connection-item[data-active="true"] {
     background-color: rgba(52, 152, 219, 0.2);
 }
+
+
+/* 自定义工具提示样式 - 添加到你的CSS文件中 */
+
+/* 移除原生title工具提示 */
+.sidebar.collapsed .connection-item {
+    position: relative;
+    title: none; /* 这不会生效，但我们将在JS中移除title属性 */
+}
+
+/* 创建自定义工具提示 */
+.custom-tooltip {
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    background-color: #333;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none; /* 防止工具提示干扰鼠标事件 */
+    z-index: 1000;
+    margin-left: 10px;
+    font-size: 14px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s, visibility 0.2s;
+}
+
+/* 添加小三角形指向 */
+.custom-tooltip::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: -6px;
+    transform: translateY(-50%);
+    border-width: 6px 6px 6px 0;
+    border-style: solid;
+    border-color: transparent #333 transparent transparent;
+}
+
+/* 显示工具提示 */
+.custom-tooltip.visible {
+    opacity: 1;
+    visibility: visible;
+}
