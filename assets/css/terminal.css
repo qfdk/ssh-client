@@ -3,6 +3,7 @@
     font-family: monospace !important;
     font-size: 14px !important;
     line-height: 1.2 !important;
+    padding: 18px 10px 12px !important;
 }
 
 /* 简单颜色修复 */
@@ -23,4 +24,25 @@
 .terminal-container * {
     font-variant-ligatures: none !important;
     font-feature-settings: normal !important;
+}
+
+/* 优化终端性能 */
+.terminal-container .xterm-viewport {
+    overflow-y: auto !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: #444 #1e1e1e !important;
+}
+
+/* 优化终端滚动条 */
+.terminal-container .xterm-viewport::-webkit-scrollbar {
+    width: 8px !important;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-track {
+    background: #1e1e1e !important;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb {
+    background-color: #444 !important;
+    border-radius: 4px !important;
 }

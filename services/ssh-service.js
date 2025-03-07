@@ -6,6 +6,7 @@ class SshService extends EventEmitter {
     constructor() {
         super();
         this.sessions = new Map();
+        this.sharedConnections = new Map(); // 存储共享的SSH连接
     }
 
     async connect(connectionDetails) {
@@ -15,7 +16,12 @@ class SshService extends EventEmitter {
                     return reject(new Error('缺少必要的连接参数'));
                 }
 
-                const conn = new Client();
+                // 生成连接唯一标识
+                const connectionKey = `${connectionDetails.username}@${connectionDetails.host}:${connectionDetails.port || 22}`;
+                
+                // 检查是否存在可共享的连接
+                const existingConnection = this.sharedConnections.get(connectionKey);
+                const conn = existingConnection ? existingConnection.conn : new Client();
 
                 conn.on('ready', () => {
                     const sessionId = Date.now().toString();
@@ -45,12 +51,25 @@ class SshService extends EventEmitter {
                             this.sessions.delete(sessionId);
                         });
 
-                        // 存储会话
+                        // 存储会话和共享连接信息
                         this.sessions.set(sessionId, {
                             conn,
                             stream,
-                            details: connectionDetails
+                            details: connectionDetails,
+                            connectionKey
                         });
+
+                        // 更新或创建共享连接记录
+                        if (!existingConnection) {
+                            this.sharedConnections.set(connectionKey, {
+                                conn,
+                                refCount: 1,
+                                lastUsed: Date.now()
+                            });
+                        } else {
+                            existingConnection.refCount++;
+                            existingConnection.lastUsed = Date.now();
+                        }
 
                         resolve({sessionId});
                     });
@@ -104,8 +123,30 @@ class SshService extends EventEmitter {
             throw new Error('会话未找到');
         }
 
-        session.conn.end();
+        // 获取连接键并查找共享连接
+        const connectionKey = session.connectionKey;
+        const sharedConnection = this.sharedConnections.get(connectionKey);
+
+        // 删除会话
         this.sessions.delete(sessionId);
+
+        // 如果存在共享连接，减少引用计数
+        if (sharedConnection) {
+            sharedConnection.refCount--;
+            
+            // 只有当引用计数为0时才真正关闭连接
+            if (sharedConnection.refCount <= 0) {
+                session.conn.end();
+                this.sharedConnections.delete(connectionKey);
+                console.log(`关闭共享连接: ${connectionKey}`);
+            } else {
+                console.log(`保持共享连接: ${connectionKey}, 剩余引用: ${sharedConnection.refCount}`);
+            }
+        } else {
+            // 如果没有共享连接记录，直接关闭
+            session.conn.end();
+        }
+        
         return true;
     }
 

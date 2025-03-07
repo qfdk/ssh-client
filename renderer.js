@@ -186,7 +186,8 @@ const sessionManager = {
             connectionId: connectionId,
             active: true,
             buffer: data.buffer || '',
-            lastActive: Date.now()
+            lastActive: Date.now(),
+            currentRemotePath: '/' // 初始化远程工作目录为根目录
         });
     },
 
@@ -271,6 +272,21 @@ const sessionManager = {
         }
     },
 
+    // 获取会话的远程工作目录
+    getRemotePath(sessionId) {
+        const session = this.sessions.get(sessionId);
+        return session ? session.currentRemotePath || '/' : '/';
+    },
+
+    // 更新会话的远程工作目录
+    updateRemotePath(sessionId, path) {
+        if (this.sessions.has(sessionId)) {
+            const session = this.sessions.get(sessionId);
+            session.currentRemotePath = path;
+            this.sessions.set(sessionId, session);
+        }
+    },
+
     // 调试: 输出所有会话状态
     dumpSessions() {
         console.log('当前会话状态:');
@@ -311,9 +327,11 @@ function createXterm(containerId, options = {}) {
                     fontFamily: 'monospace',
                     theme: {
                         background: '#1e1e1e',
-                        foreground: '#f0f0f0'
+                        foreground: '#f0f0f0',
+                        cursor: '#ffffff'  // 添加光标颜色
                     },
                     allowTransparency: false,
+                    rendererType: 'dom',   // 使用DOM渲染器可能更好地支持自定义样式
                     ...options
                 });
 
@@ -369,9 +387,11 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
             fontFamily: 'monospace',
             theme: {
                 background: '#1e1e1e',
-                foreground: '#f0f0f0'
+                foreground: '#f0f0f0',
+                cursor: '#ffffff'  // 添加光标颜色
             },
-            allowTransparency: false
+            allowTransparency: false,
+            rendererType: 'dom'    // 使用DOM渲染器可能更好地支持自定义样式
         };
 
         // 创建新的终端实例
@@ -406,7 +426,7 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
             placeholder.classList.add('hidden');
         }
 
-        // 确保终端填满空间并发送初始终端大小
+        // 确保终端填满空间并发送初始端始终端大小
         setTimeout(() => {
             if (fitAddon) {
                 fitAddon.fit();
@@ -565,6 +585,12 @@ async function switchToSession(connectionId) {
 
             // 确保终端大小正确
             setTimeout(resizeTerminal, 100);
+            
+            // 重新初始化文件管理器
+            if (fileManagerInitialized) {
+                console.log('重新初始化文件管理器，会话ID:', sessionInfo.sessionId);
+                initFileManager(sessionInfo.sessionId);
+            }
 
             console.log(`成功切换到连接: ${connection.name}的会话`);
             return true;
@@ -954,38 +980,30 @@ function setupSSHClosedHandler() {
 // =============================================
 
 // 初始化文件管理器
+let remoteFileCache = new Map(); // 远程文件缓存
+let localFileCache = new Map(); // 本地文件缓存
+
 async function initFileManager(sessionId) {
     if (!sessionId) {
-        console.error('无法初始化文件管理器：缺少会话ID');
-        showFileManagerLoading(false);
+        console.error('无法初始化文件管理器：未连接到服务器');
         return;
     }
 
-    try {
-        // 显示加载状态
-        showFileManagerLoading(true);
+    // 获取会话的远程工作目录
+    const remotePath = sessionManager.getRemotePath(sessionId);
+    console.log(`初始化文件管理器，使用会话 ${sessionId} 的远程工作目录: ${remotePath}`);
 
-        // 初始化远程文件列表
-        const remotePath = document.getElementById('remote-path').value || '/';
-        const remoteFiles = await window.api.file.list(sessionId, remotePath);
+    // 加载远程文件
+    loadRemoteFiles(remotePath);
 
-        if (remoteFiles.success) {
-            displayRemoteFiles(remoteFiles.files, remotePath);
-        } else {
-            console.error('获取远程文件失败:', remoteFiles.error);
-        }
-
-        // 只有在首次初始化时才加载本地文件
-        if (!fileManagerInitialized) {
-            await loadLocalFiles();
-            fileManagerInitialized = true;
-        }
-
-    } catch (error) {
-        console.error('初始化文件管理器失败:', error);
-    } finally {
-        // 隐藏加载状态，无论成功或失败
-        showFileManagerLoading(false);
+    // 加载本地文件
+    if (lastLocalDirectory) {
+        loadLocalFiles(lastLocalDirectory);
+    } else {
+        // 默认加载用户主目录
+        window.api.file.getHomeDir().then(homeDir => {
+            loadLocalFiles(homeDir);
+        });
     }
 }
 
@@ -1020,6 +1038,10 @@ async function loadLocalFiles(directory) {
         // 使用真实文件列表API获取文件
         const result = await window.api.file.listLocal(directory);
         if (result && result.success) {
+            // 更新缓存
+            localFileCache.set(directory, result.files);
+            console.log('更新本地文件缓存:', directory);
+            
             displayLocalFiles(result.files, directory);
         } else {
             console.error('获取本地文件失败:', result ? result.error : '未知错误');
@@ -1148,7 +1170,13 @@ function displayRemoteFiles(files, currentPath) {
         // 添加行点击事件
         if (file.isDirectory) {
             row.addEventListener('dblclick', () => {
-                const newPath = `${currentPath === '/' ? '' : currentPath}/${file.name}`;
+                let newPath;
+                if (file.name === '..') {
+                    newPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+                } else {
+                    newPath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
+                    newPath = newPath.replace(/\/+/g, '/');
+                }
                 loadRemoteFiles(newPath);
             });
         }
@@ -1165,6 +1193,12 @@ async function loadRemoteFiles(path) {
     }
 
     try {
+        // 规范化路径
+        path = path.replace(/\/+/g, '/');
+        if (!path.startsWith('/')) {
+            path = '/' + path;
+        }
+
         // 显示加载状态
         showFileManagerLoading(true);
 
@@ -1174,14 +1208,24 @@ async function loadRemoteFiles(path) {
             remotePathInput.value = path;
         }
 
+        // 更新会话的远程工作目录
+        sessionManager.updateRemotePath(currentSessionId, path);
+
         const result = await window.api.file.list(currentSessionId, path);
         if (result.success) {
+            // 更新缓存
+            const cacheKey = `${currentSessionId}:${path}`;
+            remoteFileCache.set(cacheKey, result.files);
+            console.log('更新远程文件缓存:', cacheKey);
+            
             displayRemoteFiles(result.files, path);
         } else {
             console.error('获取远程文件失败:', result.error);
+            alert(`无法访问目录 ${path}: ${result.error}`);
         }
     } catch (error) {
         console.error('加载远程文件失败:', error);
+        alert(`加载远程文件失败: ${error.message}`);
     } finally {
         // 隐藏加载状态
         showFileManagerLoading(false);
@@ -1859,12 +1903,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // 如果切换到文件管理，初始化文件列表
             if (tabId === 'file-manager' && currentSessionId) {
-                // 显示文件管理器的加载中状态
-                showFileManagerLoading(true);
-                // 延迟一点初始化，确保UI更新完成
-                setTimeout(() => {
-                    initFileManager(currentSessionId);
-                }, 100);
+                // 检查是否需要重新初始化文件管理器
+                const needInit = !fileManagerInitialized || sessionManager.getSessionByConnectionId(currentSessionId)?.sessionId !== currentSessionId;
+                
+                if (needInit) {
+                    // 显示文件管理器的加载中状态
+                    showFileManagerLoading(true);
+                    // 延迟一点初始化，确保UI更新完成
+                    setTimeout(() => {
+                        initFileManager(currentSessionId);
+                        fileManagerInitialized = true;
+                    }, 100);
+                }
             }
 
             // 如果切换到终端标签，调整终端大小
