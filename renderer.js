@@ -578,9 +578,10 @@ async function switchToSession(connectionId) {
             });
             updateActiveConnectionItem(connectionId);
 
-            // 切换到终端标签
-            if (terminalTab) {
-                terminalTab.click();
+            // 保持当前激活的标签类型
+            const activeTab = document.querySelector('.tab.active');
+            if (activeTab) {
+                activeTab.click();
             }
 
             // 确保终端大小正确
@@ -684,9 +685,10 @@ async function connectToSaved(id) {
             // 更新连接列表
             await loadConnections();
 
-            // 切换到终端标签
-            if (terminalTab) {
-                terminalTab.click();
+            // 保持当前激活的标签类型
+            const activeTab = document.querySelector('.tab.active');
+            if (activeTab) {
+                activeTab.click();
             }
         } else {
             alert(`连接失败: ${result.error}`);
@@ -897,9 +899,10 @@ async function handleConnectionFormSubmit(e) {
             // 更新连接列表
             await loadConnections();
 
-            // 切换到终端标签
-            if (terminalTab) {
-                terminalTab.click();
+            // 保持当前激活的标签类型
+            const activeTab = document.querySelector('.tab.active');
+            if (activeTab) {
+                activeTab.click();
             }
         } else {
             alert(`连接失败: ${result.error}`);
