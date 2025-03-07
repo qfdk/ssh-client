@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('api', {
     file: {
         list: (sessionId, path) => ipcRenderer.invoke('file:list', { sessionId, path }),
         listLocal: (directory) => ipcRenderer.invoke('file:list-local', directory),
+        getHomeDir: () => ipcRenderer.invoke('file:get-home-dir'),
         upload: (sessionId, localPath, remotePath) => ipcRenderer.invoke('file:upload', { sessionId, localPath, remotePath }),
         download: (sessionId, remotePath, localPath) => ipcRenderer.invoke('file:download', { sessionId, remotePath, localPath })
     },

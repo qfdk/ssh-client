@@ -520,88 +520,72 @@ function resizeTerminal() {
 
 // 改进会话切换功能
 async function switchToSession(connectionId) {
-    console.log(`尝试切换到连接ID: ${connectionId}的会话`);
-
-    // 获取当前所有会话信息
-    sessionManager.dumpSessions();
-
-    // 根据连接ID查找会话
-    const sessionInfo = sessionManager.getSessionByConnectionId(connectionId);
-    if (!sessionInfo) {
-        console.error(`找不到连接ID: ${connectionId}的会话`);
-        return false;
+    // 显示加载状态
+    const container = document.getElementById('terminal-container');
+    if (container) {
+        container.innerHTML = '<div class="loading-overlay"><div class="spinner"></div><div class="loading-text">正在切换会话...</div></div>';
     }
 
-    console.log(`找到会话，会话ID: ${sessionInfo.sessionId}`);
-
     try {
-        // 保存当前会话状态（如果有）
-        if (currentSessionId && activeTerminal) {
-            console.log(`保存当前会话: ${currentSessionId}的状态`);
-            // 可以在这里保存额外的状态信息
-        }
-
-        // 更新当前会话ID
-        const previousSessionId = currentSessionId;
-        currentSessionId = sessionInfo.sessionId;
-
-        console.log(`会话ID已切换: ${previousSessionId} -> ${currentSessionId}`);
-
-        // 清空终端容器
-        const container = document.getElementById('terminal-container');
-        if (container) {
-            container.innerHTML = '';
-        }
-
-        // 恢复终端
-        console.log(`恢复会话: ${sessionInfo.sessionId}的终端`);
-        const terminalResult = await initSimpleTerminal(sessionInfo.sessionId, sessionInfo.session);
-
-        if (!terminalResult) {
-            console.error('终端初始化失败');
+        // 获取会话信息
+        const sessionInfo = sessionManager.getSessionByConnectionId(connectionId);
+        if (!sessionInfo) {
+            console.error(`找不到连接ID: ${connectionId}的会话`);
             return false;
         }
 
+        // 使用requestAnimationFrame优化渲染性能
+        await new Promise(resolve => requestAnimationFrame(resolve));
+
+        // 保存当前会话状态
+        if (currentSessionId && activeTerminal) {
+            activeTerminal.pause();
+        }
+
+        // 更新会话ID
+        currentSessionId = sessionInfo.sessionId;
+
+        // 初始化终端
+        const terminalResult = await initSimpleTerminal(sessionInfo.sessionId, sessionInfo.session);
+        if (!terminalResult) {
+            throw new Error('终端初始化失败');
+        }
         activeTerminal = terminalResult.term;
 
-        // 获取连接信息以更新UI
+        // 获取连接信息
         const connections = await window.api.config.getConnections();
         const connection = connections.find(c => c.id === connectionId);
+        if (!connection) {
+            throw new Error('找不到连接信息');
+        }
 
-        if (connection) {
-            // 更新UI状态
-            updateConnectionStatus(true, connection.name);
-            // 更新服务器信息
+        // 批量更新UI状态
+        await Promise.all([
+            updateConnectionStatus(true, connection.name),
             updateServerInfo(true, {
                 name: connection.name,
                 host: connection.host
-            });
-            updateActiveConnectionItem(connectionId);
+            }),
+            updateActiveConnectionItem(connectionId)
+        ]);
 
-            // 保持当前激活的标签类型
-            const activeTab = document.querySelector('.tab.active');
-            if (activeTab) {
-                activeTab.click();
-            }
-
-            // 确保终端大小正确
-            setTimeout(resizeTerminal, 100);
-            
-            // 重新初始化文件管理器
-            if (fileManagerInitialized) {
-                console.log('重新初始化文件管理器，会话ID:', sessionInfo.sessionId);
-                initFileManager(sessionInfo.sessionId);
-            }
-
-            console.log(`成功切换到连接: ${connection.name}的会话`);
-            return true;
-        } else {
-            console.error('找不到连接信息');
-            return false;
+        // 延迟初始化文件管理器
+        if (fileManagerInitialized) {
+            setTimeout(() => initFileManager(sessionInfo.sessionId), 300);
         }
+
+        // 确保终端大小正确
+        setTimeout(resizeTerminal, 100);
+
+        return true;
     } catch (error) {
         console.error('切换会话失败:', error);
         return false;
+    } finally {
+        // 移除加载状态
+        if (container) {
+            container.innerHTML = '';
+        }
     }
 }
 

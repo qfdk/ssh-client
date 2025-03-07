@@ -2,6 +2,7 @@ const {app, BrowserWindow, ipcMain, dialog} = require('electron');
 const path = require('path');
 const ejs = require('ejs');
 const fs = require('fs');
+const os = require('os');
 
 // Import services
 const sshService = require('./services/ssh-service');
@@ -69,6 +70,10 @@ app.on('window-all-closed', function () {
 });
 
 // IPC Handlers for file operations
+ipcMain.handle('file:get-home-dir', async () => {
+    return os.homedir();
+});
+
 ipcMain.handle('file:list', async (event, {sessionId, path}) => {
     try {
         const files = await sshService.listFiles(sessionId, path);
