@@ -34,11 +34,117 @@ const fileManagerTab = document.querySelector('.tab[data-tab="file-manager"]');
 // 全局变量
 let activeTerminal = null;
 let currentSessionId = null;
-let connectionStore = new Map(); // 存储已连接的会话信息
 let isConnecting = false; // 连接中状态标志
 let loadingOverlay = null; // 加载遮罩元素
 let lastLocalDirectory = null; // 记住上次的本地目录
 let fileManagerInitialized = false; // 文件管理器是否已初始化
+
+// 会话管理器 - 管理多个SSH会话
+const sessionManager = {
+    // 存储所有活动会话
+    sessions: new Map(),
+
+    // 添加会话
+    addSession(sessionId, connectionId, data) {
+        console.log(`添加会话: ${sessionId}, 连接ID: ${connectionId}`);
+        this.sessions.set(sessionId, {
+            ...data,
+            connectionId: connectionId,
+            active: true,
+            buffer: data.buffer || '',
+            lastActive: Date.now()
+        });
+    },
+
+    // 获取会话
+    getSession(sessionId) {
+        return this.sessions.get(sessionId);
+    },
+
+    // 根据连接ID获取会话
+    getSessionByConnectionId(connectionId) {
+        for (const [sessionId, session] of this.sessions.entries()) {
+            if (session.connectionId === connectionId && session.active) {
+                return { sessionId, session };
+            }
+        }
+        return null;
+    },
+
+    // 更新会话
+    updateSession(sessionId, data) {
+        if (this.sessions.has(sessionId)) {
+            const session = this.sessions.get(sessionId);
+            this.sessions.set(sessionId, {...session, ...data});
+        }
+    },
+
+    // 移除会话
+    removeSession(sessionId) {
+        console.log(`移除会话: ${sessionId}`);
+        this.sessions.delete(sessionId);
+    },
+
+    // 会话是否存在且活跃
+    hasActiveSession(sessionId) {
+        return this.sessions.has(sessionId) && this.sessions.get(sessionId).active;
+    },
+
+    // 获取所有会话信息
+    getAllSessions() {
+        return Array.from(this.sessions.entries()).map(([id, session]) => ({
+            id,
+            ...session
+        }));
+    },
+
+    // 设置会话为活跃或非活跃
+    setSessionActive(sessionId, active) {
+        if (this.sessions.has(sessionId)) {
+            const session = this.sessions.get(sessionId);
+            session.active = active;
+            if (active) {
+                session.lastActive = Date.now();
+            }
+            this.sessions.set(sessionId, session);
+            console.log(`会话 ${sessionId} 状态设置为: ${active ? '活跃' : '非活跃'}`);
+        }
+    },
+
+    // 记录终端数据到缓冲区
+    addToBuffer(sessionId, data) {
+        if (this.sessions.has(sessionId)) {
+            const session = this.sessions.get(sessionId);
+
+            // 防止缓冲区过大
+            const maxBufferSize = 100000;
+            session.buffer = (session.buffer || '') + data;
+
+            if (session.buffer.length > maxBufferSize) {
+                session.buffer = session.buffer.slice(-maxBufferSize);
+            }
+
+            this.sessions.set(sessionId, session);
+        }
+    },
+
+    // 清除缓冲区
+    clearBuffer(sessionId) {
+        if (this.sessions.has(sessionId)) {
+            const session = this.sessions.get(sessionId);
+            session.buffer = '';
+            this.sessions.set(sessionId, session);
+        }
+    },
+
+    // 调试: 输出所有会话状态
+    dumpSessions() {
+        console.log('当前会话状态:');
+        for (const [sessionId, session] of this.sessions.entries()) {
+            console.log(`- 会话ID: ${sessionId}, 连接ID: ${session.connectionId}, 活跃: ${session.active}`);
+        }
+    }
+};
 
 console.log('Renderer script loaded');
 
@@ -191,6 +297,110 @@ function updateConnectionStatus(connected, name = '') {
         statusIndicator.classList.add('offline');
         statusText.textContent = '未连接';
     }
+}
+
+// 修改初始化终端函数，使其支持恢复已有终端
+async function initSimpleTerminal(sessionId, existingSession = null) {
+    try {
+        console.log(`初始化终端 - 会话ID: ${sessionId}, 是否存在会话: ${!!existingSession}`);
+
+        const container = document.getElementById('terminal-container');
+        if (!container) {
+            console.error('找不到终端容器');
+            return null;
+        }
+
+        // 清空容器
+        container.innerHTML = '';
+
+        let term, fitAddon;
+
+        // 基本终端选项
+        const termOptions = {
+            cursorBlink: true,
+            cursorStyle: 'bar',
+            fontSize: 14,
+            fontFamily: 'monospace',
+            theme: {
+                background: '#1e1e1e',
+                foreground: '#f0f0f0'
+            },
+            allowTransparency: false
+        };
+
+        // 创建新的终端实例
+        const result = await createXterm('terminal-container', termOptions);
+        term = result.term;
+        fitAddon = result.fitAddon;
+
+        // 如果是恢复已有会话，显示缓冲区数据
+        if (existingSession && existingSession.buffer) {
+            console.log(`恢复终端缓冲区，长度: ${existingSession.buffer.length}`);
+            term.write(existingSession.buffer);
+        }
+
+        // 设置全局活动终端
+        activeTerminal = term;
+        window.terminalFitAddon = fitAddon;
+
+        // 终端接收输入并发送
+        term.onData(data => {
+            if (window.api && window.api.ssh && currentSessionId) {
+                window.api.ssh.sendData(currentSessionId, data)
+                    .catch(err => console.error('发送数据失败:', err));
+            }
+        });
+
+        // 创建标签
+        createTerminalTab(sessionId);
+
+        // 隐藏placeholder
+        const placeholder = document.getElementById('terminal-placeholder');
+        if (placeholder) {
+            placeholder.classList.add('hidden');
+        }
+
+        // 确保终端填满空间并发送初始终端大小
+        setTimeout(() => {
+            if (fitAddon) {
+                fitAddon.fit();
+
+                // 获取并发送终端尺寸
+                const dimensions = fitAddon.proposeDimensions();
+                if (dimensions && window.api && window.api.ssh) {
+                    window.api.ssh.resize(sessionId, dimensions.cols, dimensions.rows)
+                        .catch(err => console.error('初始化调整终端大小失败:', err));
+                }
+            }
+        }, 200);
+
+        return { term, fitAddon };
+    } catch (error) {
+        console.error('初始化终端失败:', error);
+        throw error;
+    }
+}
+// 设置终端数据捕获，用于保存终端缓冲区
+function setupTerminalDataCapture(term, sessionId) {
+    // 监听终端数据，保存缓冲区
+    const originalWrite = term.write;
+    term.write = function (data) {
+        // 调用原始写入函数
+        const result = originalWrite.apply(this, arguments);
+
+        // 保存到会话管理器
+        const session = sessionManager.getSession(sessionId);
+        if (session) {
+            // 防止缓冲区过大，只保留最近的一部分数据
+            const maxBufferSize = 100000; // 设置适当的缓冲区大小限制
+            session.buffer += data;
+            if (session.buffer.length > maxBufferSize) {
+                session.buffer = session.buffer.slice(-maxBufferSize);
+            }
+        }
+
+        return result;
+    };
 }
 
 // 初始化文件管理器
@@ -1003,6 +1213,330 @@ body, html, .app-container, .main-content, .tab-content, .tab-pane, .terminal-vi
     background-color: #1e1e1e;
 }
 `;
+
+// 创建终端标签
+function createTerminalTab(sessionId) {
+    const tabsContainer = document.getElementById('terminal-tabs');
+    if (!tabsContainer) {
+        return;
+    }
+
+    tabsContainer.innerHTML = '';
+
+    const tab = document.createElement('div');
+    tab.className = 'terminal-tab active';
+    tab.innerHTML = `
+    <span>终端</span>
+    <button class="close-tab" data-session-id="${sessionId}">×</button>
+  `;
+
+    tabsContainer.appendChild(tab);
+
+    // 为关闭按钮添加事件监听
+    const closeBtn = tab.querySelector('.close-tab');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', async function () {
+            try {
+                await window.api.ssh.disconnect(sessionId);
+
+                // 移除会话
+                sessionManager.removeSession(sessionId);
+
+                activeTerminal = null;
+                currentSessionId = null;
+                window.terminalFitAddon = null;
+
+                const terminalContainer = document.getElementById('terminal-container');
+                if (terminalContainer) {
+                    terminalContainer.innerHTML = '';
+                }
+
+                const placeholder = document.getElementById('terminal-placeholder');
+                if (placeholder) {
+                    placeholder.classList.remove('hidden');
+                }
+
+                updateConnectionStatus(false);
+                await loadConnections();
+            } catch (error) {
+                console.error('断开连接失败:', error);
+            }
+        });
+    }
+}
+
+// 添加更新活跃连接项的辅助函数
+// 改进更新活跃连接项
+function updateActiveConnectionItem(connectionId) {
+    // 重置所有连接项状态
+    document.querySelectorAll('.connection-item').forEach(item => {
+        item.setAttribute('data-active', 'false');
+        const indicator = item.querySelector('.connection-status-indicator');
+        if (indicator) {
+            indicator.classList.remove('online');
+            indicator.classList.add('offline');
+        }
+    });
+
+    // 设置当前活跃连接项
+    const activeItem = document.querySelector(`.connection-item[data-id="${connectionId}"]`);
+    if (activeItem) {
+        activeItem.setAttribute('data-active', 'true');
+        const indicator = activeItem.querySelector('.connection-status-indicator');
+        if (indicator) {
+            indicator.classList.remove('offline');
+            indicator.classList.add('online');
+        }
+    }
+}
+// 改进SSH数据处理函数
+function setupSSHDataHandler() {
+    if (!window.api || !window.api.ssh) {
+        console.error('API未初始化，无法设置SSH数据处理');
+        return;
+    }
+
+    window.api.ssh.onData((event, data) => {
+        const dataStr = data.data;
+        const sessionId = data.sessionId;
+
+        // 调试
+        // console.log(`收到会话数据: ${sessionId}, 长度: ${dataStr.length}`);
+
+        // 向缓冲区添加数据
+        sessionManager.addToBuffer(sessionId, dataStr);
+
+        // 如果是当前会话，更新终端显示
+        if (sessionId === currentSessionId && activeTerminal) {
+            activeTerminal.write(dataStr);
+        }
+    });
+}
+
+// 改进SSH关闭处理函数
+function setupSSHClosedHandler() {
+    if (!window.api || !window.api.ssh || !window.api.ssh.onClosed) {
+        console.error('API未初始化，无法设置SSH关闭处理');
+        return;
+    }
+
+    window.api.ssh.onClosed((event, data) => {
+        const sessionId = data.sessionId;
+
+        console.log(`SSH连接关闭: ${sessionId}`);
+
+        // 标记为非活跃
+        sessionManager.setSessionActive(sessionId, false);
+
+        // 如果是当前活跃会话，清理终端显示
+        if (sessionId === currentSessionId) {
+            activeTerminal = null;
+            currentSessionId = null;
+            window.terminalFitAddon = null;
+
+            const terminalContainer = document.getElementById('terminal-container');
+            if (terminalContainer) {
+                terminalContainer.innerHTML = '';
+            }
+
+            const placeholder = document.getElementById('terminal-placeholder');
+            if (placeholder) {
+                placeholder.classList.remove('hidden');
+            }
+
+            updateConnectionStatus(false);
+        }
+
+        // 更新连接列表
+        loadConnections();
+    });
+}
+
+
+// 加载连接列表
+async function loadConnections() {
+    try {
+        if (!window.api || !window.api.config) {
+            console.error('API未初始化，无法加载连接');
+            return;
+        }
+
+        const connections = await window.api.config.getConnections();
+        const connectionList = document.getElementById('connection-list');
+
+        connectionList.innerHTML = '';
+
+        if (connections && connections.length > 0) {
+            connections.forEach(connection => {
+                // 根据sessionId和当前活跃会话确定状态
+                const isActive = connection.sessionId &&
+                    connection.sessionId === currentSessionId &&
+                    sessionManager.hasSession(connection.sessionId);
+
+                const statusClass = isActive ? 'online' : 'offline';
+
+                const item = document.createElement('div');
+                item.className = 'connection-item';
+                item.setAttribute('data-id', connection.id);
+                item.setAttribute('data-active', isActive ? 'true' : 'false');
+
+                item.innerHTML = `
+                  <div class="connection-status-indicator ${statusClass}"></div>
+                  <div class="connection-name">${connection.name}</div>
+                  <div class="connection-actions">
+                    <button class="icon-button delete-connection" data-id="${connection.id}">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                      </svg>
+                    </button>
+                  </div>
+                `;
+
+                // 添加双击事件
+                item.addEventListener('dblclick', () => {
+                    if (!isActive) {
+                        connectToSaved(connection.id);
+                    } else {
+                        // 如果已经是活跃连接，只切换到终端标签
+                        if (terminalTab) {
+                            terminalTab.click();
+                        }
+                    }
+                });
+
+                connectionList.appendChild(item);
+            });
+        } else {
+            connectionList.innerHTML = '<div class="no-connections">没有保存的连接</div>';
+        }
+    } catch (error) {
+        console.error('加载连接失败:', error);
+    }
+}
+
+// 连接到已保存的服务器
+async function connectToSaved(id) {
+    // 如果已经在连接中，则忽略
+    if (isConnecting) return;
+
+    try {
+        if (!window.api) {
+            alert('API未初始化，请重启应用');
+            return;
+        }
+
+        const connections = await window.api.config.getConnections();
+        const connection = connections.find(c => c.id === id);
+
+        if (!connection) {
+            console.error('找不到连接信息');
+            return;
+        }
+
+        // 尝试查找现有会话
+        const existingSessionInfo = sessionManager.getSessionByConnectionId(connection.id);
+
+        // 调试: 输出所有会话状态
+        sessionManager.dumpSessions();
+
+        if (existingSessionInfo && existingSessionInfo.session.active) {
+            console.log(`切换到现有会话 - 会话ID: ${existingSessionInfo.sessionId}, 连接ID: ${connection.id}`);
+
+            // 更新全局当前会话ID
+            currentSessionId = existingSessionInfo.sessionId;
+
+            // 恢复终端
+            await initSimpleTerminal(existingSessionInfo.sessionId, existingSessionInfo.session);
+
+            // 更新UI状态
+            updateConnectionStatus(true, connection.name);
+            updateActiveConnectionItem(connection.id);
+
+            // 切换到终端标签
+            if (terminalTab) {
+                terminalTab.click();
+            }
+
+            return;
+        }
+
+        // 如果没有现有会话，建立新连接
+        console.log(`建立新连接: ${connection.name}`);
+        isConnecting = true;
+        createLoadingOverlay('正在连接服务器...');
+
+        const result = await window.api.ssh.connect(connection);
+        if (result.success) {
+            currentSessionId = result.sessionId;
+
+            // 更新连接信息，包括会话ID
+            await window.api.config.saveConnection({
+                ...connection,
+                sessionId: result.sessionId
+            });
+
+            // 初始化终端
+            const terminalInfo = await initSimpleTerminal(result.sessionId);
+
+            // 保存到会话管理器
+            if (terminalInfo) {
+                sessionManager.addSession(result.sessionId, connection.id, {
+                    term: terminalInfo.term,
+                    buffer: '',
+                    name: connection.name
+                });
+            }
+
+            // 更新状态
+            updateConnectionStatus(true, connection.name);
+            updateActiveConnectionItem(connection.id);
+
+            // 更新连接列表
+            await loadConnections();
+
+            // 切换到终端标签
+            if (terminalTab) {
+                terminalTab.click();
+            }
+        } else {
+            alert(`连接失败: ${result.error}`);
+        }
+    } catch (error) {
+        console.error('连接错误:', error);
+        alert(`连接错误: ${error.message}`);
+    } finally {
+        isConnecting = false;
+        removeLoadingOverlay();
+    }
+}
+
+
+// 添加连接项点击事件委托
+document.addEventListener('click', async function (event) {
+    // 删除连接按钮 (必须放在连接项处理前)
+    if (event.target.closest('.delete-connection')) {
+        const btn = event.target.closest('.delete-connection');
+        const id = btn.getAttribute('data-id');
+
+        try {
+            if (confirm('确定要删除这个连接吗?')) {
+                if (window.api && window.api.config) {
+                    const result = await window.api.config.deleteConnection(id);
+                    if (result) {
+                        loadConnections();
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('删除连接失败:', error);
+        }
+
+        event.stopPropagation();  // 阻止事件冒泡，不触发连接项的事件
+        return;
+    }
+});
+
+
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     // 添加自定义样式
@@ -1109,8 +1643,7 @@ document.addEventListener('DOMContentLoaded', () => {
         connectionDialog.classList.add('hidden');
         connectionForm.reset();
     });
-
-    // 提交连接表单
+// 提交连接表单
     connectionForm?.addEventListener('submit', async (e) => {
         e.preventDefault();
 
@@ -1223,8 +1756,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // 本地文件浏览按钮
     const browseLocalBtn = document.getElementById('browse-local');
     if (browseLocalBtn) {
-        browseLocalBtn.addEventListener('click', async () => {
-            await loadLocalFiles(null);
+        browseLocalBtn.addEventListener('click', () => {
+            loadLocalFiles(null); // 传递 null 会触发目录选择对话框
         });
     }
 
@@ -1277,291 +1810,4 @@ document.addEventListener('DOMContentLoaded', () => {
     showTransferStatus(false);
 });
 
-// 设置SSH数据处理
-function setupSSHDataHandler() {
-    if (!window.api || !window.api.ssh) {
-        console.error('API未初始化，无法设置SSH数据处理');
-        return;
-    }
 
-    window.api.ssh.onData((event, data) => {
-        if (activeTerminal && data.sessionId === currentSessionId) {
-            //console.log('收到数据:', data.data.length);
-            activeTerminal.write(data.data);
-        }
-    });
-}
-
-// 设置SSH关闭处理
-function setupSSHClosedHandler() {
-    if (!window.api || !window.api.ssh || !window.api.ssh.onClosed) {
-        console.error('API未初始化，无法设置SSH关闭处理');
-        return;
-    }
-
-    window.api.ssh.onClosed((event, data) => {
-        if (data.sessionId === currentSessionId) {
-            activeTerminal = null;
-            currentSessionId = null;
-            window.terminalFitAddon = null;
-
-            const terminalContainer = document.getElementById('terminal-container');
-            if (terminalContainer) {
-                terminalContainer.innerHTML = '';
-            }
-
-            const placeholder = document.getElementById('terminal-placeholder');
-            if (placeholder) {
-                placeholder.classList.remove('hidden');
-            }
-
-            updateConnectionStatus(false);
-            loadConnections();
-        }
-    });
-}
-
-// 加载连接列表
-async function loadConnections() {
-    try {
-        if (!window.api || !window.api.config) {
-            console.error('API未初始化，无法加载连接');
-            return;
-        }
-
-        const connections = await window.api.config.getConnections();
-        const connectionList = document.getElementById('connection-list');
-
-        connectionList.innerHTML = '';
-
-        if (connections && connections.length > 0) {
-            connections.forEach(connection => {
-                const isActive = connection.sessionId === currentSessionId;
-                const statusClass = isActive ? 'online' : 'offline';
-
-                const item = document.createElement('div');
-                item.className = 'connection-item';
-                item.setAttribute('data-id', connection.id);
-                item.setAttribute('data-active', isActive ? 'true' : 'false');
-
-                item.innerHTML = `
-                  <div class="connection-status-indicator ${statusClass}"></div>
-                  <div class="connection-name">${connection.name}</div>
-                  <div class="connection-actions">
-                    <button class="icon-button delete-connection" data-id="${connection.id}">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
-                      </svg>
-                    </button>
-                  </div>
-                `;
-
-                // 添加双击事件
-                item.addEventListener('dblclick', () => {
-                    if (!isActive) {
-                        connectToSaved(connection.id);
-                    }
-                });
-
-                connectionList.appendChild(item);
-            });
-        } else {
-            connectionList.innerHTML = '<div class="no-connections">没有保存的连接</div>';
-        }
-    } catch (error) {
-        console.error('加载连接失败:', error);
-    }
-}
-
-// 简化版终端初始化
-async function initSimpleTerminal(sessionId) {
-    try {
-        const container = document.getElementById('terminal-container');
-        if (!container) {
-            console.error('找不到终端容器');
-            return;
-        }
-
-        container.innerHTML = '';
-
-        // 使用动态加载xterm.js的方式创建终端
-        const {term, fitAddon} = await createXterm('terminal-container');
-        activeTerminal = term;
-
-        // 存储fitAddon供全局使用
-        window.terminalFitAddon = fitAddon;
-
-        // 终端接收输入并发送
-        activeTerminal.onData(data => {
-            if (window.api && window.api.ssh) {
-                window.api.ssh.sendData(sessionId, data)
-                    .catch(err => console.error('发送数据失败:', err));
-            }
-        });
-
-        // 添加大小调整处理
-        activeTerminal.onResize(size => {
-            if (window.api && window.api.ssh) {
-                window.api.ssh.resize(sessionId, size.cols, size.rows)
-                    .catch(err => console.error('调整终端大小失败:', err));
-            }
-        });
-
-        // 创建标签
-        createTerminalTab(sessionId);
-
-        // 隐藏placeholder
-        const placeholder = document.getElementById('terminal-placeholder');
-        if (placeholder) {
-            placeholder.classList.add('hidden');
-        }
-
-        // 确保终端填满空间并发送初始终端大小
-        setTimeout(() => {
-            if (fitAddon) {
-                fitAddon.fit();
-
-                // 获取并发送终端尺寸
-                const dimensions = fitAddon.proposeDimensions();
-                if (dimensions && window.api && window.api.ssh) {
-                    window.api.ssh.resize(sessionId, dimensions.cols, dimensions.rows)
-                        .catch(err => console.error('初始化调整终端大小失败:', err));
-                }
-            }
-        }, 200);
-
-        return {term, fitAddon};
-    } catch (error) {
-        console.error('初始化终端失败:', error);
-        throw error;
-    }
-}
-
-// 创建终端标签
-function createTerminalTab(sessionId) {
-    const tabsContainer = document.getElementById('terminal-tabs');
-    if (!tabsContainer) {
-        return;
-    }
-
-    tabsContainer.innerHTML = '';
-
-    const tab = document.createElement('div');
-    tab.className = 'terminal-tab active';
-    tab.innerHTML = `
-    <span>终端</span>
-    <button class="close-tab" data-session-id="${sessionId}">×</button>
-  `;
-
-    tabsContainer.appendChild(tab);
-
-    // 为关闭按钮添加事件监听
-    const closeBtn = tab.querySelector('.close-tab');
-    if (closeBtn) {
-        closeBtn.addEventListener('click', async function () {
-            try {
-                await window.api.ssh.disconnect(sessionId);
-                activeTerminal = null;
-                currentSessionId = null;
-                window.terminalFitAddon = null;
-
-                const terminalContainer = document.getElementById('terminal-container');
-                if (terminalContainer) {
-                    terminalContainer.innerHTML = '';
-                }
-
-                const placeholder = document.getElementById('terminal-placeholder');
-                if (placeholder) {
-                    placeholder.classList.remove('hidden');
-                }
-
-                updateConnectionStatus(false);
-                await loadConnections();
-            } catch (error) {
-                console.error('断开连接失败:', error);
-            }
-        });
-    }
-}
-
-// 添加连接项点击事件委托
-document.addEventListener('click', async function (event) {
-    // 删除连接按钮 (必须放在连接项处理前)
-    if (event.target.closest('.delete-connection')) {
-        const btn = event.target.closest('.delete-connection');
-        const id = btn.getAttribute('data-id');
-
-        try {
-            if (confirm('确定要删除这个连接吗?')) {
-                if (window.api && window.api.config) {
-                    const result = await window.api.config.deleteConnection(id);
-                    if (result) {
-                        loadConnections();
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('删除连接失败:', error);
-        }
-
-        event.stopPropagation();  // 阻止事件冒泡，不触发连接项的事件
-        return;
-    }
-});
-
-// 连接到已保存的服务器
-async function connectToSaved(id) {
-    // 如果已经在连接中，则忽略
-    if (isConnecting) return;
-
-    try {
-        isConnecting = true;
-        createLoadingOverlay('正在连接服务器...');
-
-        if (!window.api) {
-            alert('API未初始化，请重启应用');
-            return;
-        }
-
-        const connections = await window.api.config.getConnections();
-        const connection = connections.find(c => c.id === id);
-
-        if (!connection) {
-            console.error('找不到连接信息');
-            return;
-        }
-
-        const result = await window.api.ssh.connect(connection);
-        if (result.success) {
-            currentSessionId = result.sessionId;
-
-            // 更新连接信息
-            await window.api.config.saveConnection({
-                ...connection,
-                sessionId: result.sessionId
-            });
-
-            // 初始化终端
-            await initSimpleTerminal(result.sessionId);
-
-            // 更新状态
-            updateConnectionStatus(true, connection.name);
-
-            // 更新连接列表
-            await loadConnections();
-
-            // 切换到终端标签
-            if (terminalTab) {
-                terminalTab.click();
-            }
-        } else {
-            alert(`连接失败: ${result.error}`);
-        }
-    } catch (error) {
-        console.error('连接错误:', error);
-        alert(`连接错误: ${error.message}`);
-    } finally {
-        isConnecting = false;
-        removeLoadingOverlay();
-    }
-}

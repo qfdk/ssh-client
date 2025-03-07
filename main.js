@@ -296,7 +296,6 @@ sshService.on('close', (sessionId) => {
     }
 });
 ipcMain.handle('ssh:resize', async (event, {sessionId, cols, rows}) => {
-    console.log('调整终端大小:', sessionId, cols, rows);
     try {
         if (!sshService) {
             return {success: false, error: 'SSH服务未初始化'};
