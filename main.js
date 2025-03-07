@@ -16,6 +16,7 @@ function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
+        show: false, // 先不显示窗口，等最大化后再显示
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
@@ -45,6 +46,12 @@ function createWindow() {
 
             // 加载文件
             mainWindow.loadFile(tempHtmlPath);
+
+            // 窗口准备好后最大化并显示
+            mainWindow.once('ready-to-show', () => {
+                mainWindow.maximize();
+                mainWindow.show();
+            });
         }
     );
 }
