@@ -429,7 +429,7 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
 
 // 创建终端标签
 function createTerminalTab(sessionId) {
-    const tabsContainer = document.getElementById('terminal-tabs');
+    const tabsContainer = document.getElementById('terminal-tabs-left');
     if (!tabsContainer) {
         return;
     }
@@ -469,7 +469,9 @@ function createTerminalTab(sessionId) {
                     placeholder.classList.remove('hidden');
                 }
 
+                // 更新连接状态和服务器信息
                 updateConnectionStatus(false);
+                updateServerInfo(false);
                 await loadConnections();
             } catch (error) {
                 console.error('断开连接失败:', error);
@@ -549,6 +551,11 @@ async function switchToSession(connectionId) {
         if (connection) {
             // 更新UI状态
             updateConnectionStatus(true, connection.name);
+            // 更新服务器信息
+            updateServerInfo(true, {
+                name: connection.name,
+                host: connection.host
+            });
             updateActiveConnectionItem(connectionId);
 
             // 切换到终端标签
@@ -601,6 +608,11 @@ async function connectToSaved(id) {
 
             if (switchResult) {
                 console.log('会话切换成功');
+                // 更新服务器信息显示
+                updateServerInfo(true, {
+                    name: connection.name,
+                    host: connection.host
+                });
                 return;
             } else {
                 console.warn('会话切换失败，尝试建立新连接');
@@ -636,6 +648,11 @@ async function connectToSaved(id) {
 
             // 更新状态
             updateConnectionStatus(true, connection.name);
+            // 更新服务器信息
+            updateServerInfo(true, {
+                name: connection.name,
+                host: connection.host
+            });
             updateActiveConnectionItem(connection.id);
 
             // 更新连接列表
@@ -829,6 +846,11 @@ async function handleConnectionFormSubmit(e) {
 
             // 更新状态
             updateConnectionStatus(true, connectionDetails.name);
+            // 更新服务器信息
+            updateServerInfo(true, {
+                name: connectionDetails.name,
+                host: connectionDetails.host
+            });
 
             // 关闭对话框
             connectionDialog.classList.add('hidden');
@@ -918,6 +940,8 @@ function setupSSHClosedHandler() {
             }
 
             updateConnectionStatus(false);
+            // 更新服务器信息
+            updateServerInfo(false);
         }
 
         // 更新连接列表
@@ -1957,3 +1981,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     console.log('应用初始化完成');
 });
+
+function updateServerInfo(connected, serverInfo = {}) {
+    // 更新主界面中的服务器信息
+    const mainServerInfo = document.getElementById('main-server-info');
+    if (mainServerInfo) {
+        const indicator = mainServerInfo.querySelector('.server-indicator');
+        const nameElement = mainServerInfo.querySelector('.server-name');
+
+        if (connected && serverInfo.name) {
+            indicator.classList.add('online');
+            nameElement.textContent = `${serverInfo.name} (${serverInfo.host})`;
+        } else {
+            indicator.classList.remove('online');
+            nameElement.textContent = '未连接';
+        }
+    }
+
+    // 更新终端标签中的服务器信息
+    const terminalServerInfo = document.getElementById('terminal-server-info');
+    if (terminalServerInfo) {
+        const indicator = terminalServerInfo.querySelector('.server-indicator');
+        const nameElement = terminalServerInfo.querySelector('.server-name');
+
+        if (connected && serverInfo.name) {
+            indicator.classList.add('online');
+            nameElement.textContent = `${serverInfo.name} (${serverInfo.host})`;
+        } else {
+            indicator.classList.remove('online');
+            nameElement.textContent = '未连接';
+        }
+    }
+}

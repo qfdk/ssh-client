@@ -973,3 +973,72 @@ input[type="checkbox"] {
 .file-list tr.directory:hover {
   background-color: #e9eef6;
 }
+
+/* 添加到 main.css 文件末尾 */
+
+/* 标签栏布局修改，使其支持右侧显示服务器信息 */
+.tabs {
+  display: flex;
+  justify-content: space-between;
+  background-color: white;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tabs-left {
+  display: flex;
+}
+
+.server-info {
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  color: var(--secondary-color);
+  font-size: 14px;
+}
+
+.server-info .server-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+
+.server-info .server-indicator.online {
+  background-color: var(--success-color);
+}
+
+.server-info .server-name {
+  font-weight: 500;
+}
+
+/* 终端标签页添加当前连接显示 */
+.terminal-tabs {
+  display: flex;
+  justify-content: space-between;
+  background-color: #252526;
+  padding: 4px 4px 0;
+  border-bottom: 1px solid #181a1f;
+}
+
+.terminal-tabs-left {
+  display: flex;
+}
+
+.terminal-server-info {
+  padding: 4px 12px;
+  display: flex;
+  align-items: center;
+  color: #abb2bf;
+  font-size: 13px;
+}
+
+.terminal-server-info .server-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+
+.terminal-server-info .server-indicator.online {
+  background-color: var(--success-color);
+}
