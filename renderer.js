@@ -149,15 +149,26 @@ function updateConnectionStatus(connected, name = '') {
 function updateActiveConnectionItem(connectionId) {
     // 重置所有连接项状态
     document.querySelectorAll('.connection-item').forEach(item => {
-        item.setAttribute('data-active', 'false');
+        const itemConnectionId = item.getAttribute('data-id');
+        const sessionInfo = sessionManager.getSessionByConnectionId(itemConnectionId);
+        
+        // 检查是否有会话，以及是否为当前会话
+        const isActive = sessionInfo !== null && sessionInfo.sessionId === currentSessionId;
+        
+        item.setAttribute('data-active', isActive ? 'true' : 'false');
         const indicator = item.querySelector('.connection-status-indicator');
         if (indicator) {
-            indicator.classList.remove('online');
-            indicator.classList.add('offline');
+            if (isActive) {
+                indicator.classList.remove('offline');
+                indicator.classList.add('online');
+            } else {
+                indicator.classList.remove('online');
+                indicator.classList.add('offline');
+            }
         }
     });
-
-    // 设置当前活跃连接项
+    
+    // 确保当前连接项被正确标记
     const activeItem = document.querySelector(`.connection-item[data-id="${connectionId}"]`);
     if (activeItem) {
         activeItem.setAttribute('data-active', 'true');
@@ -199,7 +210,7 @@ const sessionManager = {
     // 根据连接ID获取会话
     getSessionByConnectionId(connectionId) {
         for (const [sessionId, session] of this.sessions.entries()) {
-            if (session.connectionId === connectionId && session.active) {
+            if (session.connectionId === connectionId) {
                 return {sessionId, session};
             }
         }
@@ -237,13 +248,18 @@ const sessionManager = {
     setSessionActive(sessionId, active) {
         if (this.sessions.has(sessionId)) {
             const session = this.sessions.get(sessionId);
+            const oldState = session.active;
             session.active = active;
             if (active) {
                 session.lastActive = Date.now();
             }
             this.sessions.set(sessionId, session);
-            console.log(`会话 ${sessionId} 状态设置为: ${active ? '活跃' : '非活跃'}`);
+            console.log(`[sessionManager] 会话 ${sessionId} 状态已更新: ${oldState} -> ${active}`);
+        } else {
+            console.warn(`[sessionManager] 尝试设置不存在的会话 ${sessionId} 的活跃状态`);
         }
+        // 输出当前所有会话状态
+        this.dumpSessions();
     },
 
     // 记录终端数据到缓冲区
@@ -366,7 +382,13 @@ function createXterm(containerId, options = {}) {
 // 初始化终端函数，支持恢复已有终端
 async function initSimpleTerminal(sessionId, existingSession = null) {
     try {
-        console.log(`初始化终端 - 会话ID: ${sessionId}, 是否存在会话: ${!!existingSession}`);
+        console.log(`[initSimpleTerminal] 开始初始化终端 - 会话ID: ${sessionId}`);
+        console.log(`[initSimpleTerminal] 现有会话信息:`, existingSession ? {
+            active: existingSession.active,
+            hasStream: !!existingSession.stream,
+            bufferLength: existingSession.buffer ? existingSession.buffer.length : 0
+        } : '无');
+
 
         const container = document.getElementById('terminal-container');
         if (!container) {
@@ -401,8 +423,11 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
 
         // 如果是恢复已有会话，显示缓冲区数据
         if (existingSession && existingSession.buffer) {
-            console.log(`恢复终端缓冲区，长度: ${existingSession.buffer.length}`);
+            console.log(`[initSimpleTerminal] 恢复会话 ${sessionId} 的终端缓冲区，长度: ${existingSession.buffer.length}`);
             term.write(existingSession.buffer);
+            console.log(`[initSimpleTerminal] 已写入缓冲区数据到终端`);
+        } else {
+            console.log(`[initSimpleTerminal] 会话 ${sessionId} 没有缓冲区数据需要恢复`);
         }
 
         // 设置全局活动终端
@@ -520,30 +545,72 @@ function resizeTerminal() {
 
 // 改进会话切换功能
 async function switchToSession(connectionId) {
+    console.log(`[switchToSession] 开始切换到连接ID: ${connectionId} 的会话`);
+    
     // 显示加载状态
     const container = document.getElementById('terminal-container');
     if (container) {
         container.innerHTML = '<div class="loading-overlay"><div class="spinner"></div><div class="loading-text">正在切换会话...</div></div>';
+        console.log(`[switchToSession] 已显示加载状态`);
     }
 
     try {
         // 获取会话信息
+        console.log(`[switchToSession] 尝试获取连接ID: ${connectionId} 的会话信息`);
         const sessionInfo = sessionManager.getSessionByConnectionId(connectionId);
         if (!sessionInfo) {
-            console.error(`找不到连接ID: ${connectionId}的会话`);
+            console.error(`[switchToSession] 找不到连接ID: ${connectionId} 的会话`);
             return false;
         }
+        console.log(`[switchToSession] 成功获取会话信息: sessionId=${sessionInfo.sessionId}`);
+
 
         // 使用requestAnimationFrame优化渲染性能
+        console.log(`[switchToSession] 等待渲染帧...`);
         await new Promise(resolve => requestAnimationFrame(resolve));
+        console.log(`[switchToSession] 渲染帧已完成`);
 
         // 保存当前会话状态
         if (currentSessionId && activeTerminal) {
-            activeTerminal.pause();
+            console.log(`[switchToSession] 保存当前会话 ${currentSessionId} 的状态`);
+            // 移除不存在的pause()方法调用
+            console.log(`[switchToSession] 准备切换终端`);
+            
+            // 将当前会话标记为非活跃
+            const currentSession = sessionManager.getSession(currentSessionId);
+            if (currentSession) {
+                console.log(`[switchToSession] 将当前会话 ${currentSessionId} 标记为非活跃`);
+                sessionManager.setSessionActive(currentSessionId, false);
+            } else {
+                console.warn(`[switchToSession] 当前会话 ${currentSessionId} 不存在，无法标记为非活跃`);
+            }
+        } else {
+            console.log(`[switchToSession] 没有当前活跃会话需要保存状态`);
         }
 
         // 更新会话ID
+        console.log(`[switchToSession] 更新当前会话ID: ${currentSessionId} -> ${sessionInfo.sessionId}`);
         currentSessionId = sessionInfo.sessionId;
+        
+        // 确保会话被标记为活跃
+        sessionManager.setSessionActive(sessionInfo.sessionId, true);
+        
+        // 确保会话在后端也被标记为活跃
+        try {
+            await window.api.ssh.activateSession(sessionInfo.sessionId);
+            console.log(`[switchToSession] 已在后端激活会话 ${sessionInfo.sessionId}`);
+        } catch (err) {
+            console.warn(`[switchToSession] 在后端激活会话失败: ${err.message}`, err);
+        }
+        
+        // 刷新命令提示符
+        console.log(`[switchToSession] 准备刷新会话 ${sessionInfo.sessionId} 的命令提示符`);
+        try {
+            await window.api.ssh.refreshPrompt(sessionInfo.sessionId);
+            console.log(`[switchToSession] 成功刷新会话 ${sessionInfo.sessionId} 的命令提示符`);
+        } catch (err) {
+            console.warn(`[switchToSession] 刷新命令提示符失败: ${err.message}`, err);
+        }
 
         // 初始化终端
         const terminalResult = await initSimpleTerminal(sessionInfo.sessionId, sessionInfo.session);
@@ -551,6 +618,9 @@ async function switchToSession(connectionId) {
             throw new Error('终端初始化失败');
         }
         activeTerminal = terminalResult.term;
+        
+        // 重新设置SSH数据处理程序，确保能正确处理当前会话的数据
+        setupSSHDataHandler();
 
         // 获取连接信息
         const connections = await window.api.config.getConnections();
@@ -576,6 +646,9 @@ async function switchToSession(connectionId) {
 
         // 确保终端大小正确
         setTimeout(resizeTerminal, 100);
+        
+        // 调试输出当前会话状态
+        sessionManager.dumpSessions();
 
         return true;
     } catch (error) {
@@ -611,8 +684,14 @@ async function connectToSaved(id) {
         // 尝试切换到现有会话
         const sessionInfo = sessionManager.getSessionByConnectionId(connection.id);
 
-        if (sessionInfo && sessionInfo.session.active) {
+        if (sessionInfo) {
             console.log(`尝试切换到现有会话, 连接ID: ${connection.id}`);
+            
+            // 确保会话被标记为活跃状态
+            if (sessionInfo.session && !sessionInfo.session.active) {
+                sessionInfo.session.active = true;
+                sessionManager.updateSession(sessionInfo.sessionId, { active: true });
+            }
 
             // 使用新的切换功能
             const switchResult = await switchToSession(connection.id);
@@ -668,6 +747,9 @@ async function connectToSaved(id) {
 
             // 更新连接列表
             await loadConnections();
+
+            // 更新活跃连接项状态
+            updateActiveConnectionItem(connection.id);
 
             // 保持当前激活的标签类型
             const activeTab = document.querySelector('.tab.active');
@@ -745,9 +827,10 @@ async function loadConnections() {
 
         if (connections && connections.length > 0) {
             connections.forEach(connection => {
-                // 检查连接是否有活跃会话
+                // 检查连接是否有会话
                 const existingSessionInfo = sessionManager.getSessionByConnectionId(connection.id);
-                const isActive = existingSessionInfo !== null &&
+                // 如果有会话，并且是当前活跃会话，则显示为活跃
+                const isActive = existingSessionInfo !== null && 
                     existingSessionInfo.sessionId === currentSessionId;
 
                 const statusClass = isActive ? 'online' : 'offline';
@@ -883,6 +966,9 @@ async function handleConnectionFormSubmit(e) {
             // 更新连接列表
             await loadConnections();
 
+            // 更新活跃连接项状态
+            updateActiveConnectionItem(connection.id);
+
             // 保持当前激活的标签类型
             const activeTab = document.querySelector('.tab.active');
             if (activeTab) {
@@ -916,7 +1002,14 @@ function setupSSHDataHandler() {
 
         // 如果是当前会话，更新终端显示
         if (sessionId === currentSessionId && activeTerminal) {
-            activeTerminal.write(dataStr);
+            try {
+                activeTerminal.write(dataStr);
+                console.log(`[setupSSHDataHandler] 写入数据到终端，会话ID: ${sessionId}, 数据长度: ${dataStr.length}`);
+            } catch (error) {
+                console.error(`[setupSSHDataHandler] 写入数据到终端失败:`, error);
+            }
+        } else {
+            console.log(`[setupSSHDataHandler] 数据已添加到缓冲区，会话ID: ${sessionId}, 数据长度: ${dataStr.length}`);
         }
     });
 }

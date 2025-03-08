@@ -307,6 +307,7 @@ sshService.on('close', (sessionId) => {
         console.error('处理SSH关闭事件时出错:', error);
     }
 });
+
 ipcMain.handle('ssh:resize', async (event, {sessionId, cols, rows}) => {
     try {
         if (!sshService) {
@@ -317,6 +318,38 @@ ipcMain.handle('ssh:resize', async (event, {sessionId, cols, rows}) => {
         return {success: true};
     } catch (error) {
         console.error('调整终端大小错误:', error);
+        return {success: false, error: error.message};
+    }
+});
+
+// 添加刷新命令提示符的处理程序
+ipcMain.handle('ssh:refresh-prompt', async (event, sessionId) => {
+    console.log('刷新命令提示符请求:', sessionId);
+    try {
+        if (!sshService) {
+            return {success: false, error: 'SSH服务未初始化'};
+        }
+
+        await sshService.refreshPrompt(sessionId);
+        return {success: true};
+    } catch (error) {
+        console.error('刷新命令提示符错误:', error);
+        return {success: false, error: error.message};
+    }
+});
+
+// 添加激活会话的处理程序
+ipcMain.handle('ssh:activate-session', async (event, sessionId) => {
+    console.log('激活会话请求:', sessionId);
+    try {
+        if (!sshService) {
+            return {success: false, error: 'SSH服务未初始化'};
+        }
+
+        await sshService.activateSession(sessionId);
+        return {success: true};
+    } catch (error) {
+        console.error('激活会话错误:', error);
         return {success: false, error: error.message};
     }
 });
