@@ -13,10 +13,10 @@ class SshService extends EventEmitter {
     // 根据连接ID获取会话ID
     getSessionByConnectionId(connectionId) {
         if (!connectionId) return null;
-        
+
         const sessionId = this.connectionToSession.get(connectionId);
         if (!sessionId) return null;
-        
+
         // 检查会话是否仍然存在
         const session = this.sessions.get(sessionId);
         if (!session) {
@@ -24,7 +24,7 @@ class SshService extends EventEmitter {
             this.connectionToSession.delete(connectionId);
             return null;
         }
-        
+
         return {
             sessionId,
             session
@@ -35,7 +35,7 @@ class SshService extends EventEmitter {
     getConnection(connectionId) {
         const sessionInfo = this.getSessionByConnectionId(connectionId);
         if (!sessionInfo) return null;
-        
+
         return sessionInfo.session;
     }
 
@@ -54,32 +54,21 @@ class SshService extends EventEmitter {
                         // 标记会话为活跃
                         existingSessionInfo.session.active = true;
                         this.sessions.set(existingSessionInfo.sessionId, existingSessionInfo.session);
-                        
+
                         // 如果存在stream，使用更可靠的方式刷新命令提示符
                         if (existingSessionInfo.session.stream) {
                             console.log(`[connect] 复用会话时刷新命令提示符, 会话ID: ${existingSessionInfo.sessionId}`);
-                            // 使用更可靠的方式刷新命令提示符
-                            // 1. 先发送回车换行执行空命令
-                            existingSessionInfo.session.stream.write('\r\n');
-                            // 2. 短暂延迟后再发送一个回车，确保命令提示符完全刷新
-                            setTimeout(() => {
-                                if (existingSessionInfo.session.stream) {
-                                    existingSessionInfo.session.stream.write('\r');
-                                    console.log(`[connect] 已发送第二次回车到复用会话 ${existingSessionInfo.sessionId}`);
-                                }
-                            }, 100);
-                            console.log(`[connect] 已发送回车换行到复用会话 ${existingSessionInfo.sessionId}`);
                         } else {
                             console.warn(`[connect] 复用会话 ${existingSessionInfo.sessionId} 没有可用的stream`);
                         }
-                        
+
                         return resolve({sessionId: existingSessionInfo.sessionId});
                     }
                 }
 
                 // 生成连接唯一标识
                 const connectionKey = `${connectionDetails.username}@${connectionDetails.host}:${connectionDetails.port || 22}`;
-                
+
                 // 检查是否存在可共享的连接
                 const existingConnection = this.sharedConnections.get(connectionKey);
                 const conn = existingConnection ? existingConnection.conn : new Client();
@@ -109,7 +98,7 @@ class SshService extends EventEmitter {
 
                         stream.on('close', () => {
                             this.emit('close', sessionId);
-                            
+
                             // 获取会话信息
                             const session = this.sessions.get(sessionId);
                             if (session) {
@@ -129,7 +118,7 @@ class SshService extends EventEmitter {
                             connectionId: connectionDetails.id, // 保存连接ID
                             active: true // 添加活跃状态标志
                         });
-                        
+
                         // 保存连接ID到会话ID的映射
                         if (connectionDetails.id) {
                             this.connectionToSession.set(connectionDetails.id, sessionId);
@@ -213,7 +202,7 @@ class SshService extends EventEmitter {
         // 如果存在共享连接，减少引用计数
         if (sharedConnection) {
             sharedConnection.refCount--;
-            
+
             // 只有当引用计数为0时才真正关闭连接
             if (sharedConnection.refCount <= 0) {
                 session.conn.end();
@@ -226,7 +215,7 @@ class SshService extends EventEmitter {
             // 如果没有共享连接记录，直接关闭
             session.conn.end();
         }
-        
+
         return true;
     }
 
@@ -241,7 +230,7 @@ class SshService extends EventEmitter {
         session.stream.write(dataStr);
         return true;
     }
-    
+
     // 新增方法：激活会话
     async activateSession(sessionId) {
         console.log(`[activateSession] 开始激活会话 ${sessionId}`);
@@ -250,32 +239,21 @@ class SshService extends EventEmitter {
             console.error(`[activateSession] 会话 ${sessionId} 未找到`);
             throw new Error('会话未找到');
         }
-        
+
         // 标记会话为活跃
         session.active = true;
         this.sessions.set(sessionId, session);
         console.log(`[activateSession] 会话 ${sessionId} 已标记为活跃`);
-        
+
         // 如果存在stream，刷新命令提示符
         if (session.stream) {
-            // 使用更可靠的方式刷新命令提示符
-            // 1. 先发送回车换行执行空命令
-            session.stream.write('\r\n');
-            // 2. 短暂延迟后再发送一个回车，确保命令提示符完全刷新
-            setTimeout(() => {
-                if (session.stream) {
-                    session.stream.write('\r');
-                    console.log(`[activateSession] 已发送第二次回车到会话 ${sessionId}`);
-                }
-            }, 100);
-            console.log(`[activateSession] 已发送回车换行到会话 ${sessionId}`);
             return true;
         } else {
             console.warn(`[activateSession] 会话 ${sessionId} 没有可用的stream`);
             throw new Error('会话没有可用的stream');
         }
     }
-    
+
     // 新增方法：刷新命令提示符
     async refreshPrompt(sessionId) {
         console.log(`[refreshPrompt] 开始刷新会话 ${sessionId} 的命令提示符`);
@@ -284,22 +262,7 @@ class SshService extends EventEmitter {
             console.error(`[refreshPrompt] 会话 ${sessionId} 未找到或shell未启动`);
             throw new Error('会话未找到或shell未启动');
         }
-        
         console.log(`[refreshPrompt] 会话 ${sessionId} 状态: active=${session.active}, hasStream=${!!session.stream}`);
-        
-        // 使用更可靠的方式刷新命令提示符
-        // 1. 先发送回车换行执行空命令
-        session.stream.write('\r\n');
-        // 2. 短暂延迟后再发送一个回车，确保命令提示符完全刷新
-        setTimeout(() => {
-            if (session.stream) {
-                session.stream.write('\r');
-                console.log(`[refreshPrompt] 已发送第二次回车到会话 ${sessionId}`);
-            }
-        }, 100);
-        
-        console.log(`[refreshPrompt] 已发送回车换行到会话 ${sessionId}`);
-        
         return true;
     }
 

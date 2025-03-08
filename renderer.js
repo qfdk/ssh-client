@@ -151,10 +151,10 @@ function updateActiveConnectionItem(connectionId) {
     document.querySelectorAll('.connection-item').forEach(item => {
         const itemConnectionId = item.getAttribute('data-id');
         const sessionInfo = sessionManager.getSessionByConnectionId(itemConnectionId);
-        
+
         // 检查是否有会话，以及是否为当前会话
         const isActive = sessionInfo !== null && sessionInfo.sessionId === currentSessionId;
-        
+
         item.setAttribute('data-active', isActive ? 'true' : 'false');
         const indicator = item.querySelector('.connection-status-indicator');
         if (indicator) {
@@ -167,7 +167,7 @@ function updateActiveConnectionItem(connectionId) {
             }
         }
     });
-    
+
     // 确保当前连接项被正确标记
     const activeItem = document.querySelector(`.connection-item[data-id="${connectionId}"]`);
     if (activeItem) {
@@ -389,19 +389,30 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
             bufferLength: existingSession.buffer ? existingSession.buffer.length : 0
         } : '无');
 
-
         const container = document.getElementById('terminal-container');
         if (!container) {
             console.error('找不到终端容器');
             return null;
         }
 
-        // 清空容器
+        // Important fix: Properly dispose of existing terminal before creating a new one
+        if (activeTerminal) {
+            console.log(`[initSimpleTerminal] 正在销毁之前的终端实例`);
+            try {
+                // Dispose existing terminal properly
+                activeTerminal.dispose();
+            } catch (err) {
+                console.warn(`[initSimpleTerminal] 销毁之前的终端实例出错:`, err);
+            }
+            activeTerminal = null;
+        }
+
+        // Clear container after proper disposal
         container.innerHTML = '';
 
         let term, fitAddon;
 
-        // 基本终端选项
+        // Basic terminal options
         const termOptions = {
             cursorBlink: true,
             cursorStyle: 'bar',
@@ -410,18 +421,18 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
             theme: {
                 background: '#1e1e1e',
                 foreground: '#f0f0f0',
-                cursor: '#ffffff'  // 添加光标颜色
+                cursor: '#ffffff'
             },
             allowTransparency: false,
-            rendererType: 'dom'    // 使用DOM渲染器可能更好地支持自定义样式
+            rendererType: 'dom'
         };
 
-        // 创建新的终端实例
+        // Create new terminal instance
         const result = await createXterm('terminal-container', termOptions);
         term = result.term;
         fitAddon = result.fitAddon;
 
-        // 如果是恢复已有会话，显示缓冲区数据
+        // If restoring existing session, show buffer data
         if (existingSession && existingSession.buffer) {
             console.log(`[initSimpleTerminal] 恢复会话 ${sessionId} 的终端缓冲区，长度: ${existingSession.buffer.length}`);
             term.write(existingSession.buffer);
@@ -430,11 +441,11 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
             console.log(`[initSimpleTerminal] 会话 ${sessionId} 没有缓冲区数据需要恢复`);
         }
 
-        // 设置全局活动终端
+        // Set global active terminal
         activeTerminal = term;
         window.terminalFitAddon = fitAddon;
 
-        // 终端接收输入并发送
+        // Terminal input handling
         term.onData(data => {
             if (window.api && window.api.ssh && currentSessionId) {
                 window.api.ssh.sendData(currentSessionId, data)
@@ -442,25 +453,41 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
             }
         });
 
-        // 创建标签
+        // Create tab
         createTerminalTab(sessionId);
 
-        // 隐藏placeholder
+        // Hide placeholder
         const placeholder = document.getElementById('terminal-placeholder');
         if (placeholder) {
             placeholder.classList.add('hidden');
         }
 
-        // 确保终端填满空间并发送初始端始终端大小
+        // Make terminal visible and ensure focus
+        container.style.display = 'block';
+        setTimeout(() => {
+            if (term) {
+                try {
+                    term.focus();
+                } catch (err) {
+                    console.warn(`[initSimpleTerminal] 无法聚焦终端:`, err);
+                }
+            }
+        }, 50);
+
+        // Ensure terminal fills space and send initial terminal size
         setTimeout(() => {
             if (fitAddon) {
-                fitAddon.fit();
+                try {
+                    fitAddon.fit();
 
-                // 获取并发送终端尺寸
-                const dimensions = fitAddon.proposeDimensions();
-                if (dimensions && window.api && window.api.ssh) {
-                    window.api.ssh.resize(sessionId, dimensions.cols, dimensions.rows)
-                        .catch(err => console.error('初始化调整终端大小失败:', err));
+                    // Get and send terminal dimensions
+                    const dimensions = fitAddon.proposeDimensions();
+                    if (dimensions && window.api && window.api.ssh) {
+                        window.api.ssh.resize(sessionId, dimensions.cols, dimensions.rows)
+                            .catch(err => console.error('初始化调整终端大小失败:', err));
+                    }
+                } catch (err) {
+                    console.warn(`[initSimpleTerminal] 调整终端大小出错:`, err);
                 }
             }
         }, 200);
@@ -469,6 +496,41 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
     } catch (error) {
         console.error('初始化终端失败:', error);
         throw error;
+    }
+}
+
+function ensureTerminalVisible() {
+    const container = document.getElementById('terminal-container');
+    const placeholder = document.getElementById('terminal-placeholder');
+
+    if (container) {
+        container.style.display = 'block';
+    }
+
+    if (placeholder) {
+        placeholder.classList.add('hidden');
+    }
+
+    // Only resize if needed (not during tab switching)
+    if (window.terminalFitAddon && !isTabSwitching) {
+        setTimeout(() => {
+            try {
+                window.terminalFitAddon.fit();
+            } catch (err) {
+                console.warn('调整终端大小失败:', err);
+            }
+        }, 100);
+    }
+
+    // Only focus if not during tab switching
+    if (activeTerminal && !isTabSwitching) {
+        setTimeout(() => {
+            try {
+                activeTerminal.focus();
+            } catch (err) {
+                console.warn('聚焦终端失败:', err);
+            }
+        }, 100);
     }
 }
 
@@ -546,16 +608,20 @@ function resizeTerminal() {
 // 改进会话切换功能
 async function switchToSession(connectionId) {
     console.log(`[switchToSession] 开始切换到连接ID: ${connectionId} 的会话`);
-    
-    // 显示加载状态
-    const container = document.getElementById('terminal-container');
-    if (container) {
-        container.innerHTML = '<div class="loading-overlay"><div class="spinner"></div><div class="loading-text">正在切换会话...</div></div>';
+
+    // Create a separate loading indicator instead of replacing terminal content
+    const loadingOverlay = document.createElement('div');
+    loadingOverlay.className = 'loading-overlay';
+    loadingOverlay.innerHTML = '<div class="spinner"></div><div class="loading-text">正在切换会话...</div>';
+
+    const terminalContent = document.querySelector('.terminal-content');
+    if (terminalContent) {
+        terminalContent.appendChild(loadingOverlay);
         console.log(`[switchToSession] 已显示加载状态`);
     }
 
     try {
-        // 获取会话信息
+        // Get session info
         console.log(`[switchToSession] 尝试获取连接ID: ${connectionId} 的会话信息`);
         const sessionInfo = sessionManager.getSessionByConnectionId(connectionId);
         if (!sessionInfo) {
@@ -564,19 +630,16 @@ async function switchToSession(connectionId) {
         }
         console.log(`[switchToSession] 成功获取会话信息: sessionId=${sessionInfo.sessionId}`);
 
-
-        // 使用requestAnimationFrame优化渲染性能
+        // Wait for next animation frame to improve rendering
         console.log(`[switchToSession] 等待渲染帧...`);
         await new Promise(resolve => requestAnimationFrame(resolve));
         console.log(`[switchToSession] 渲染帧已完成`);
 
-        // 保存当前会话状态
+        // Save current session state
         if (currentSessionId && activeTerminal) {
             console.log(`[switchToSession] 保存当前会话 ${currentSessionId} 的状态`);
-            // 移除不存在的pause()方法调用
-            console.log(`[switchToSession] 准备切换终端`);
-            
-            // 将当前会话标记为非活跃
+
+            // Mark current session as inactive
             const currentSession = sessionManager.getSession(currentSessionId);
             if (currentSession) {
                 console.log(`[switchToSession] 将当前会话 ${currentSessionId} 标记为非活跃`);
@@ -588,48 +651,50 @@ async function switchToSession(connectionId) {
             console.log(`[switchToSession] 没有当前活跃会话需要保存状态`);
         }
 
-        // 更新会话ID
+        // Update session ID
         console.log(`[switchToSession] 更新当前会话ID: ${currentSessionId} -> ${sessionInfo.sessionId}`);
         currentSessionId = sessionInfo.sessionId;
-        
-        // 确保会话被标记为活跃
+
+        // Mark session as active
         sessionManager.setSessionActive(sessionInfo.sessionId, true);
-        
-        // 确保会话在后端也被标记为活跃
+
+        // Ensure session is marked as active in backend
         try {
             await window.api.ssh.activateSession(sessionInfo.sessionId);
             console.log(`[switchToSession] 已在后端激活会话 ${sessionInfo.sessionId}`);
         } catch (err) {
             console.warn(`[switchToSession] 在后端激活会话失败: ${err.message}`, err);
         }
-        
-        // 刷新命令提示符
-        console.log(`[switchToSession] 准备刷新会话 ${sessionInfo.sessionId} 的命令提示符`);
-        try {
-            await window.api.ssh.refreshPrompt(sessionInfo.sessionId);
-            console.log(`[switchToSession] 成功刷新会话 ${sessionInfo.sessionId} 的命令提示符`);
-        } catch (err) {
-            console.warn(`[switchToSession] 刷新命令提示符失败: ${err.message}`, err);
+
+        // Refresh prompt
+        if (!isTabSwitching) {
+            console.log(`[switchToSession] 准备刷新会话 ${sessionInfo.sessionId} 的命令提示符`);
+            try {
+                await window.api.ssh.refreshPrompt(sessionInfo.sessionId);
+                console.log(`[switchToSession] 成功刷新会话 ${sessionInfo.sessionId} 的命令提示符`);
+            } catch (err) {
+                console.warn(`[switchToSession] 刷新命令提示符失败: ${err.message}`, err);
+            }
         }
 
-        // 初始化终端
+        // Initialize terminal - pass the full session object
         const terminalResult = await initSimpleTerminal(sessionInfo.sessionId, sessionInfo.session);
         if (!terminalResult) {
             throw new Error('终端初始化失败');
         }
         activeTerminal = terminalResult.term;
-        
-        // 重新设置SSH数据处理程序，确保能正确处理当前会话的数据
+
+        // Reset SSH data handler
         setupSSHDataHandler();
 
-        // 获取连接信息
+        // Get connection info
         const connections = await window.api.config.getConnections();
         const connection = connections.find(c => c.id === connectionId);
         if (!connection) {
             throw new Error('找不到连接信息');
         }
 
-        // 批量更新UI状态
+        // Update UI states
         await Promise.all([
             updateConnectionStatus(true, connection.name),
             updateServerInfo(true, {
@@ -639,15 +704,15 @@ async function switchToSession(connectionId) {
             updateActiveConnectionItem(connectionId)
         ]);
 
-        // 延迟初始化文件管理器
+        // Delay file manager initialization
         if (fileManagerInitialized) {
             setTimeout(() => initFileManager(sessionInfo.sessionId), 300);
         }
 
-        // 确保终端大小正确
+        // Ensure terminal size is correct
         setTimeout(resizeTerminal, 100);
-        
-        // 调试输出当前会话状态
+
+        // Debug output
         sessionManager.dumpSessions();
 
         return true;
@@ -655,9 +720,9 @@ async function switchToSession(connectionId) {
         console.error('切换会话失败:', error);
         return false;
     } finally {
-        // 移除加载状态
-        if (container) {
-            container.innerHTML = '';
+        // Remove loading overlay
+        if (terminalContent && terminalContent.contains(loadingOverlay)) {
+            terminalContent.removeChild(loadingOverlay);
         }
     }
 }
@@ -686,11 +751,11 @@ async function connectToSaved(id) {
 
         if (sessionInfo) {
             console.log(`尝试切换到现有会话, 连接ID: ${connection.id}`);
-            
+
             // 确保会话被标记为活跃状态
             if (sessionInfo.session && !sessionInfo.session.active) {
                 sessionInfo.session.active = true;
-                sessionManager.updateSession(sessionInfo.sessionId, { active: true });
+                sessionManager.updateSession(sessionInfo.sessionId, {active: true});
             }
 
             // 使用新的切换功能
@@ -830,7 +895,7 @@ async function loadConnections() {
                 // 检查连接是否有会话
                 const existingSessionInfo = sessionManager.getSessionByConnectionId(connection.id);
                 // 如果有会话，并且是当前活跃会话，则显示为活跃
-                const isActive = existingSessionInfo !== null && 
+                const isActive = existingSessionInfo !== null &&
                     existingSessionInfo.sessionId === currentSessionId;
 
                 const statusClass = isActive ? 'online' : 'offline';
@@ -1121,7 +1186,7 @@ async function loadLocalFiles(directory) {
             // 更新缓存
             localFileCache.set(directory, result.files);
             console.log('更新本地文件缓存:', directory);
-            
+
             displayLocalFiles(result.files, directory);
         } else {
             console.error('获取本地文件失败:', result ? result.error : '未知错误');
@@ -1297,7 +1362,7 @@ async function loadRemoteFiles(path) {
             const cacheKey = `${currentSessionId}:${path}`;
             remoteFileCache.set(cacheKey, result.files);
             console.log('更新远程文件缓存:', cacheKey);
-            
+
             displayRemoteFiles(result.files, path);
         } else {
             console.error('获取远程文件失败:', result.error);
@@ -1911,6 +1976,9 @@ document.addEventListener('click', async function (event) {
     }
 });
 
+// Add this flag to track tab switching operations
+let isTabSwitching = false;
+
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     // 添加自定义样式
@@ -1956,19 +2024,24 @@ document.addEventListener('DOMContentLoaded', () => {
     // 当前活动标签
     let activeTabId = 'terminal';
 
-    // 标签切换 (添加防抖处理)
+
+// Modify the tab switching handler
     tabs.forEach(tab => {
         tab.addEventListener('click', debounce(function () {
             const tabId = tab.getAttribute('data-tab');
 
-            // 避免重复切换到同一个标签
+            // Avoid switching to the same tab
             if (tabId === activeTabId) {
                 return;
             }
 
-            // 只有连接成功后才能切换到终端或文件管理
+            // Set flag to prevent multiple operations
+            isTabSwitching = true;
+
+            // Only allow switching to terminal or file manager if connected
             if ((tabId === 'terminal' || tabId === 'file-manager') && !currentSessionId) {
                 alert('请先连接到服务器');
+                isTabSwitching = false;
                 return;
             }
 
@@ -1978,18 +2051,18 @@ document.addEventListener('DOMContentLoaded', () => {
             tab.classList.add('active');
             document.getElementById(`${tabId}-tab`).classList.add('active');
 
-            // 更新当前活动标签
+            // Update current active tab
             activeTabId = tabId;
 
-            // 如果切换到文件管理，初始化文件列表
+            // If switching to file manager, initialize file list
             if (tabId === 'file-manager' && currentSessionId) {
-                // 检查是否需要重新初始化文件管理器
+                // Check if file manager needs initialization
                 const needInit = !fileManagerInitialized || sessionManager.getSessionByConnectionId(currentSessionId)?.sessionId !== currentSessionId;
-                
+
                 if (needInit) {
-                    // 显示文件管理器的加载中状态
+                    // Show file manager loading state
                     showFileManagerLoading(true);
-                    // 延迟一点初始化，确保UI更新完成
+                    // Delay initialization to ensure UI is updated
                     setTimeout(() => {
                         initFileManager(currentSessionId);
                         fileManagerInitialized = true;
@@ -1997,11 +2070,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            // 如果切换到终端标签，调整终端大小
+            // If switching to terminal tab, adjust terminal size but DON'T refresh terminal content
             if (tabId === 'terminal' && activeTerminal) {
-                setTimeout(resizeTerminal, 50);
+                ensureTerminalVisible();
+                setTimeout(() => {
+                    resizeTerminal();
+                    isTabSwitching = false; // Reset flag once everything is done
+                }, 50);
+            } else {
+                isTabSwitching = false; // Reset flag for other tabs
             }
-        }, 300)); // 添加300ms的防抖延迟
+        }, 300)); // Add 300ms debounce delay
     });
 
     // 侧边栏折叠/展开
