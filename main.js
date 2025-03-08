@@ -274,10 +274,21 @@ sshService.on('data', (sessionId, data) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
 
     try {
-        // console.log('SSH数据:', sessionId, data.length);
-        // 修改: 确保data是字符串格式
+        // 确保data是字符串格式
         const dataStr = typeof data === 'string' ? data : data.toString('utf8');
-        mainWindow.webContents.send('ssh:data', {sessionId, data: dataStr});
+
+        // 增加数据标识，帮助调试
+        const timestamp = Date.now();
+        const shortId = `${timestamp % 10000}`;
+
+        console.log(`[${shortId}] 向渲染进程发送数据，会话ID: ${sessionId}, 数据长度: ${dataStr.length}`);
+
+        mainWindow.webContents.send('ssh:data', {
+            sessionId,
+            data: dataStr,
+            timestamp,
+            id: shortId
+        });
     } catch (error) {
         console.error('处理SSH数据时出错:', error);
     }

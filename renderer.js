@@ -267,24 +267,46 @@ const sessionManager = {
         if (this.sessions.has(sessionId)) {
             const session = this.sessions.get(sessionId);
 
-            // 防止缓冲区过大
-            const maxBufferSize = 100000;
-            session.buffer = (session.buffer || '') + data;
+            // 只有活跃会话才添加到缓冲区
+            if (session.active) {
+                // 防止缓冲区过大
+                const maxBufferSize = 100000;
+                session.buffer = (session.buffer || '') + data;
 
-            if (session.buffer.length > maxBufferSize) {
-                session.buffer = session.buffer.slice(-maxBufferSize);
+                if (session.buffer.length > maxBufferSize) {
+                    session.buffer = session.buffer.slice(-maxBufferSize);
+                }
+
+                this.sessions.set(sessionId, session);
+                console.log(`[sessionManager] 添加数据到会话 ${sessionId} 的缓冲区, 长度: ${data.length}, 总长度: ${session.buffer.length}`);
+            } else {
+                console.log(`[sessionManager] 会话 ${sessionId} 不活跃，不添加数据到缓冲区`);
             }
-
-            this.sessions.set(sessionId, session);
+        } else {
+            console.warn(`[sessionManager] 尝试向不存在的会话 ${sessionId} 添加数据`);
         }
     },
-
+    deduplicateBuffer(sessionId) {
+        if (this.sessions.has(sessionId)) {
+            const session = this.sessions.get(sessionId);
+            if (session.buffer) {
+                // 简单去重：保留最新的50%内容
+                const halfLength = Math.floor(session.buffer.length / 2);
+                session.buffer = session.buffer.substring(halfLength);
+                this.sessions.set(sessionId, session);
+                console.log(`[sessionManager] 已去重会话 ${sessionId} 的缓冲区, 新长度: ${session.buffer.length}`);
+            }
+        }
+    },
     // 清除缓冲区
     clearBuffer(sessionId) {
         if (this.sessions.has(sessionId)) {
             const session = this.sessions.get(sessionId);
+            console.log(`[sessionManager] 清除会话 ${sessionId} 的缓冲区`);
             session.buffer = '';
             this.sessions.set(sessionId, session);
+        } else {
+            console.warn(`[sessionManager] 尝试清除不存在的会话 ${sessionId} 的缓冲区`);
         }
     },
 
@@ -379,8 +401,11 @@ function createXterm(containerId, options = {}) {
     });
 }
 
+// 存储当前终端的数据处理函数，以便在销毁终端前移除
+let currentTerminalDataHandler = null;
+
 // 初始化终端函数，支持恢复已有终端
-async function initSimpleTerminal(sessionId, existingSession = null) {
+async function initSimpleTerminal(sessionId, existingSession = null, showBuffer = false) {
     try {
         console.log(`[initSimpleTerminal] 开始初始化终端 - 会话ID: ${sessionId}`);
         console.log(`[initSimpleTerminal] 现有会话信息:`, existingSession ? {
@@ -395,24 +420,30 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
             return null;
         }
 
-        // Important fix: Properly dispose of existing terminal before creating a new one
+        // 正确销毁现有终端
         if (activeTerminal) {
             console.log(`[initSimpleTerminal] 正在销毁之前的终端实例`);
             try {
-                // Dispose existing terminal properly
+                // 先移除数据处理程序
+                if (currentTerminalDataHandler) {
+                    activeTerminal.off('data', currentTerminalDataHandler);
+                    currentTerminalDataHandler = null;
+                    console.log(`[initSimpleTerminal] 已移除终端数据处理程序`);
+                }
+
+                // 然后销毁终端
                 activeTerminal.dispose();
+                activeTerminal = null;
+                console.log(`[initSimpleTerminal] 已销毁旧终端`);
             } catch (err) {
                 console.warn(`[initSimpleTerminal] 销毁之前的终端实例出错:`, err);
             }
-            activeTerminal = null;
         }
 
-        // Clear container after proper disposal
+        // 清理容器
         container.innerHTML = '';
 
-        let term, fitAddon;
-
-        // Basic terminal options
+        // 基本终端选项
         const termOptions = {
             cursorBlink: true,
             cursorStyle: 'bar',
@@ -427,42 +458,60 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
             rendererType: 'dom'
         };
 
-        // Create new terminal instance
+        // 创建新终端实例
         const result = await createXterm('terminal-container', termOptions);
-        term = result.term;
-        fitAddon = result.fitAddon;
-
-        // If restoring existing session, show buffer data
-        if (existingSession && existingSession.buffer) {
-            console.log(`[initSimpleTerminal] 恢复会话 ${sessionId} 的终端缓冲区，长度: ${existingSession.buffer.length}`);
+        const term = result.term;
+        const fitAddon = result.fitAddon;
+        // 清除终端内容，避免历史内容问题
+        term.clear();
+        // 确保终端可见并聚焦的代码调整:
+        container.style.display = 'block';
+        setTimeout(() => {
+            if (term) {
+                try {
+                    // 先清屏再聚焦
+                    term.clear();
+                    term.focus();
+                } catch (err) {
+                    console.warn(`[initSimpleTerminal] 无法聚焦终端:`, err);
+                }
+            }
+        }, 50);
+        
+        // 恢复缓冲区数据
+        if (showBuffer && existingSession && existingSession.buffer) {
+            console.log(`[initSimpleTerminal] 恢复会话 ${sessionId} 的终端缓冲区`);
             term.write(existingSession.buffer);
-            console.log(`[initSimpleTerminal] 已写入缓冲区数据到终端`);
         } else {
-            console.log(`[initSimpleTerminal] 会话 ${sessionId} 没有缓冲区数据需要恢复`);
+            console.log(`[initSimpleTerminal] 不显示会话 ${sessionId} 的缓冲区数据`);
+            // 不写入缓冲区数据
         }
 
-        // Set global active terminal
+        // 设置全局变量
         activeTerminal = term;
         window.terminalFitAddon = fitAddon;
 
-        // Terminal input handling
-        term.onData(data => {
+        // 设置新的终端数据处理
+        currentTerminalDataHandler = (data) => {
             if (window.api && window.api.ssh && currentSessionId) {
+                console.log(`[terminal data] 发送数据到会话 ${currentSessionId}, 数据长度: ${data.length}`);
                 window.api.ssh.sendData(currentSessionId, data)
                     .catch(err => console.error('发送数据失败:', err));
             }
-        });
+        };
 
-        // Create tab
+        term.onData(currentTerminalDataHandler);
+
+        // 创建标签
         createTerminalTab(sessionId);
 
-        // Hide placeholder
+        // 隐藏占位符
         const placeholder = document.getElementById('terminal-placeholder');
         if (placeholder) {
             placeholder.classList.add('hidden');
         }
 
-        // Make terminal visible and ensure focus
+        // 确保终端可见并聚焦
         container.style.display = 'block';
         setTimeout(() => {
             if (term) {
@@ -474,13 +523,13 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
             }
         }, 50);
 
-        // Ensure terminal fills space and send initial terminal size
+        // 调整终端大小并发送尺寸信息
         setTimeout(() => {
             if (fitAddon) {
                 try {
                     fitAddon.fit();
 
-                    // Get and send terminal dimensions
+                    // 获取并发送终端尺寸
                     const dimensions = fitAddon.proposeDimensions();
                     if (dimensions && window.api && window.api.ssh) {
                         window.api.ssh.resize(sessionId, dimensions.cols, dimensions.rows)
@@ -490,7 +539,7 @@ async function initSimpleTerminal(sessionId, existingSession = null) {
                     console.warn(`[initSimpleTerminal] 调整终端大小出错:`, err);
                 }
             }
-        }, 200);
+        }, 100);
 
         return {term, fitAddon};
     } catch (error) {
@@ -609,7 +658,7 @@ function resizeTerminal() {
 async function switchToSession(connectionId) {
     console.log(`[switchToSession] 开始切换到连接ID: ${connectionId} 的会话`);
 
-    // Create a separate loading indicator instead of replacing terminal content
+    // 创建加载指示器
     const loadingOverlay = document.createElement('div');
     loadingOverlay.className = 'loading-overlay';
     loadingOverlay.innerHTML = '<div class="spinner"></div><div class="loading-text">正在切换会话...</div>';
@@ -617,84 +666,85 @@ async function switchToSession(connectionId) {
     const terminalContent = document.querySelector('.terminal-content');
     if (terminalContent) {
         terminalContent.appendChild(loadingOverlay);
-        console.log(`[switchToSession] 已显示加载状态`);
     }
 
     try {
-        // Get session info
-        console.log(`[switchToSession] 尝试获取连接ID: ${connectionId} 的会话信息`);
+        // 获取会话信息
         const sessionInfo = sessionManager.getSessionByConnectionId(connectionId);
         if (!sessionInfo) {
             console.error(`[switchToSession] 找不到连接ID: ${connectionId} 的会话`);
             return false;
         }
-        console.log(`[switchToSession] 成功获取会话信息: sessionId=${sessionInfo.sessionId}`);
 
-        // Wait for next animation frame to improve rendering
-        console.log(`[switchToSession] 等待渲染帧...`);
+        // 等待渲染帧
         await new Promise(resolve => requestAnimationFrame(resolve));
-        console.log(`[switchToSession] 渲染帧已完成`);
 
-        // Save current session state
+        // 保存当前会话状态
         if (currentSessionId && activeTerminal) {
-            console.log(`[switchToSession] 保存当前会话 ${currentSessionId} 的状态`);
+            // 标记当前会话为非活跃
+            sessionManager.setSessionActive(currentSessionId, false);
 
-            // Mark current session as inactive
-            const currentSession = sessionManager.getSession(currentSessionId);
-            if (currentSession) {
-                console.log(`[switchToSession] 将当前会话 ${currentSessionId} 标记为非活跃`);
-                sessionManager.setSessionActive(currentSessionId, false);
-            } else {
-                console.warn(`[switchToSession] 当前会话 ${currentSessionId} 不存在，无法标记为非活跃`);
+            // 清理终端事件监听器
+            if (currentTerminalDataHandler) {
+                try {
+                    activeTerminal.off('data', currentTerminalDataHandler);
+                    currentTerminalDataHandler = null;
+                } catch (err) {
+                    console.warn(`[switchToSession] 移除终端数据处理监听器出错:`, err);
+                }
             }
-        } else {
-            console.log(`[switchToSession] 没有当前活跃会话需要保存状态`);
         }
 
-        // Update session ID
-        console.log(`[switchToSession] 更新当前会话ID: ${currentSessionId} -> ${sessionInfo.sessionId}`);
+        // 更新会话ID
         currentSessionId = sessionInfo.sessionId;
 
-        // Mark session as active
+        // 标记会话为活跃
         sessionManager.setSessionActive(sessionInfo.sessionId, true);
 
-        // Ensure session is marked as active in backend
+        // 在后端激活会话
         try {
             await window.api.ssh.activateSession(sessionInfo.sessionId);
-            console.log(`[switchToSession] 已在后端激活会话 ${sessionInfo.sessionId}`);
         } catch (err) {
             console.warn(`[switchToSession] 在后端激活会话失败: ${err.message}`, err);
         }
 
-        // Refresh prompt
-        if (!isTabSwitching) {
-            console.log(`[switchToSession] 准备刷新会话 ${sessionInfo.sessionId} 的命令提示符`);
-            try {
-                await window.api.ssh.refreshPrompt(sessionInfo.sessionId);
-                console.log(`[switchToSession] 成功刷新会话 ${sessionInfo.sessionId} 的命令提示符`);
-            } catch (err) {
-                console.warn(`[switchToSession] 刷新命令提示符失败: ${err.message}`, err);
-            }
-        }
+        // ===== 关键修改: 清除会话缓冲区 =====
+        // 清空会话缓冲区，这样初始化终端时就不会显示之前的内容
+        sessionManager.clearBuffer(sessionInfo.sessionId);
 
-        // Initialize terminal - pass the full session object
+        // 设置数据处理
+        setupSSHDataHandler();
+        setupSSHClosedHandler();
+
+        // 初始化终端 - 由于缓冲区已被清空，将不会显示历史内容
         const terminalResult = await initSimpleTerminal(sessionInfo.sessionId, sessionInfo.session);
         if (!terminalResult) {
             throw new Error('终端初始化失败');
         }
         activeTerminal = terminalResult.term;
 
-        // Reset SSH data handler
-        setupSSHDataHandler();
+        // 刷新命令提示符
+        try {
+            // 先确保会话活跃
+            await window.api.ssh.activateSession(sessionInfo.sessionId);
 
-        // Get connection info
+            // 然后刷新提示符并等待一小段时间让命令执行
+            await window.api.ssh.refreshPrompt(sessionInfo.sessionId);
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            console.log(`[switchToSession] 已刷新会话 ${sessionInfo.sessionId} 的命令提示符`);
+        } catch (err) {
+            console.warn(`[switchToSession] 刷新命令提示符失败: ${err.message}`, err);
+        }
+
+        // 获取连接信息并更新UI
         const connections = await window.api.config.getConnections();
         const connection = connections.find(c => c.id === connectionId);
         if (!connection) {
             throw new Error('找不到连接信息');
         }
 
-        // Update UI states
+        // 更新UI状态
         await Promise.all([
             updateConnectionStatus(true, connection.name),
             updateServerInfo(true, {
@@ -704,23 +754,15 @@ async function switchToSession(connectionId) {
             updateActiveConnectionItem(connectionId)
         ]);
 
-        // Delay file manager initialization
-        if (fileManagerInitialized) {
-            setTimeout(() => initFileManager(sessionInfo.sessionId), 300);
-        }
-
-        // Ensure terminal size is correct
+        // 确保终端大小正确
         setTimeout(resizeTerminal, 100);
-
-        // Debug output
-        sessionManager.dumpSessions();
 
         return true;
     } catch (error) {
         console.error('切换会话失败:', error);
         return false;
     } finally {
-        // Remove loading overlay
+        // 移除加载遮罩
         if (terminalContent && terminalContent.contains(loadingOverlay)) {
             terminalContent.removeChild(loadingOverlay);
         }
@@ -790,7 +832,7 @@ async function connectToSaved(id) {
             });
 
             // 初始化终端
-            const terminalInfo = await initSimpleTerminal(result.sessionId);
+            const terminalInfo = await initSimpleTerminal(result.sessionId, null, true); // 新连接时显示缓冲区
 
             // 保存到会话管理器
             if (terminalInfo) {
@@ -920,9 +962,9 @@ async function loadConnections() {
     `;
 
                 // 添加双击事件
-                item.addEventListener('dblclick', () => {
+                item.addEventListener('dblclick', async () => {
                     console.log(`双击连接: ${connection.id}, 名称: ${connection.name}`);
-                    connectToSaved(connection.id);
+                    await connectToSaved(connection.id);
                 });
 
                 // 添加鼠标悬停事件，用于显示自定义工具提示
@@ -1017,7 +1059,7 @@ async function handleConnectionFormSubmit(e) {
             connectionForm.reset();
 
             // 初始化终端
-            const terminalInfo = await initSimpleTerminal(result.sessionId);
+            const terminalInfo = await initSimpleTerminal(result.sessionId, null, true); // 新连接时显示缓冲区
 
             // 保存到会话管理器
             if (terminalInfo) {
@@ -1051,6 +1093,9 @@ async function handleConnectionFormSubmit(e) {
     }
 }
 
+// 存储当前的数据处理监听器移除函数
+let currentDataHandlerRemover = null;
+
 // 设置SSH数据处理
 function setupSSHDataHandler() {
     if (!window.api || !window.api.ssh) {
@@ -1058,7 +1103,15 @@ function setupSSHDataHandler() {
         return;
     }
 
-    window.api.ssh.onData((event, data) => {
+    // 先移除旧的事件监听器
+    if (currentDataHandlerRemover) {
+        currentDataHandlerRemover();
+        currentDataHandlerRemover = null;
+        console.log('已移除旧的SSH数据处理监听器');
+    }
+
+    // 添加新的事件监听器
+    currentDataHandlerRemover = window.api.ssh.onData((event, data) => {
         const dataStr = data.data;
         const sessionId = data.sessionId;
 
@@ -1079,14 +1132,23 @@ function setupSSHDataHandler() {
     });
 }
 
-// 设置SSH关闭处理
+let currentClosedHandlerRemover = null;
+
 function setupSSHClosedHandler() {
     if (!window.api || !window.api.ssh || !window.api.ssh.onClosed) {
         console.error('API未初始化，无法设置SSH关闭处理');
         return;
     }
 
-    window.api.ssh.onClosed(async (event, data) => {
+    // 先移除旧的事件监听器
+    if (currentClosedHandlerRemover) {
+        currentClosedHandlerRemover();
+        currentClosedHandlerRemover = null;
+        console.log('已移除旧的SSH关闭处理监听器');
+    }
+
+    // 添加新的事件监听器
+    currentClosedHandlerRemover = window.api.ssh.onClosed(async (event, data) => {
         const sessionId = data.sessionId;
 
         console.log(`SSH连接关闭: ${sessionId}`);

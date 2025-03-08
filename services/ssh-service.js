@@ -88,12 +88,26 @@ class SshService extends EventEmitter {
                         stream.on('data', (data) => {
                             // 将Buffer转为字符串，避免数据类型问题
                             const dataStr = data.toString('utf8');
-                            this.emit('data', sessionId, dataStr);
+
+                            // 检查会话是否活跃，只有活跃会话才发送数据
+                            const session = this.sessions.get(sessionId);
+                            if (session && session.active) {
+                                this.emit('data', sessionId, dataStr);
+                            } else {
+                                console.log(`[SshService] 会话 ${sessionId} 不活跃，不发送数据`);
+                            }
                         });
 
                         stream.stderr.on('data', (data) => {
                             const dataStr = data.toString('utf8');
-                            this.emit('data', sessionId, dataStr);
+
+                            // 同样检查会话活跃状态
+                            const session = this.sessions.get(sessionId);
+                            if (session && session.active) {
+                                this.emit('data', sessionId, dataStr);
+                            } else {
+                                console.log(`[SshService] 会话 ${sessionId} 不活跃，不发送stderr数据`);
+                            }
                         });
 
                         stream.on('close', () => {
@@ -222,13 +236,24 @@ class SshService extends EventEmitter {
     async sendData(sessionId, data) {
         const session = this.sessions.get(sessionId);
         if (!session || !session.stream) {
+            console.error(`[sendData] 会话 ${sessionId} 未找到或shell未启动`);
             throw new Error('会话未找到或shell未启动');
+        }
+
+        if (!session.active) {
+            console.warn(`[sendData] 会话 ${sessionId} 不活跃，但仍然尝试发送数据`);
         }
 
         // 确保data是字符串格式
         const dataStr = typeof data === 'string' ? data : data.toString('utf8');
-        session.stream.write(dataStr);
-        return true;
+
+        try {
+            session.stream.write(dataStr);
+            return true;
+        } catch (err) {
+            console.error(`[sendData] 向会话 ${sessionId} 发送数据失败:`, err);
+            throw err;
+        }
     }
 
     // 新增方法：激活会话
@@ -254,7 +279,8 @@ class SshService extends EventEmitter {
         }
     }
 
-    // 新增方法：刷新命令提示符
+    // 修改refreshPrompt方法，增加实际发送命令的功能
+
     async refreshPrompt(sessionId) {
         console.log(`[refreshPrompt] 开始刷新会话 ${sessionId} 的命令提示符`);
         const session = this.sessions.get(sessionId);
@@ -262,8 +288,17 @@ class SshService extends EventEmitter {
             console.error(`[refreshPrompt] 会话 ${sessionId} 未找到或shell未启动`);
             throw new Error('会话未找到或shell未启动');
         }
-        console.log(`[refreshPrompt] 会话 ${sessionId} 状态: active=${session.active}, hasStream=${!!session.stream}`);
-        return true;
+
+        try {
+            // 发送一个正确格式的clear命令，确保包含回车符
+            session.stream.write('clear\r');
+
+            console.log(`[refreshPrompt] 已发送clear命令到会话 ${sessionId}`);
+            return true;
+        } catch (err) {
+            console.error(`[refreshPrompt] 发送clear命令失败:`, err);
+            throw err;
+        }
     }
 
     // 新增方法：调整终端大小
