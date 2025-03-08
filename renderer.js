@@ -1448,7 +1448,7 @@ function displayRemoteFiles(files, currentPath) {
 
         // 添加行点击事件
         if (file.isDirectory) {
-            row.addEventListener('dblclick', () => {
+            row.addEventListener('dblclick', async () => {
                 let newPath;
                 if (file.name === '..') {
                     newPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
@@ -1456,7 +1456,7 @@ function displayRemoteFiles(files, currentPath) {
                     newPath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
                     newPath = newPath.replace(/\/+/g, '/');
                 }
-                loadRemoteFiles(newPath);
+                await loadRemoteFiles(newPath);
             });
         }
 
@@ -1495,6 +1495,12 @@ async function loadRemoteFiles(path) {
         // Log the request
         console.log(`请求远程文件列表: 会话ID ${currentSessionId}, 路径 ${path}`);
 
+        // 在读取文件前先验证会话是否有效
+        const session = sessionManager.getSession(currentSessionId);
+        if (!session || !session.active) {
+            throw new Error('会话已失效，请重新连接');
+        }
+
         // Make the request
         const result = await window.api.file.list(currentSessionId, path);
 
@@ -1509,11 +1515,39 @@ async function loadRemoteFiles(path) {
         } else {
             console.error('获取远程文件失败:', result.error);
 
+            // Check for specific SFTP errors
+            if (result.error && result.error.includes('Channel open failure')) {
+                // 这可能是SFTP子系统问题，显示一个更明确的错误
+                console.log('尝试使用SSH命令代替SFTP获取文件列表');
+
+                try {
+                    // 尝试使用普通SSH命令列出文件（作为备用方案）
+                    const lsResult = await window.api.ssh.execute(currentSessionId, `ls -la "${path}"`);
+                    if (lsResult && lsResult.trim && lsResult.trim().length > 0) {
+                        // 如果命令成功但我们只是不能使用SFTP
+                        alert('SFTP访问失败，但SSH连接仍然有效。文件管理功能可能受限。');
+
+                        // 简单地显示空目录，用户至少能看到提示
+                        displayRemoteFiles([], path);
+                    } else {
+                        throw new Error('无法访问远程文件系统');
+                    }
+                } catch (cmdError) {
+                    console.error('执行SSH命令也失败:', cmdError);
+                    alert(`无法访问SFTP，可能是此服务器未启用SFTP功能或您没有足够权限。`);
+                }
+            }
             // Check if it's a connection error
-            if (result.error && (result.error.includes('not connected') ||
+            else if (result.error && (result.error.includes('not connected') ||
                 result.error.includes('connection closed') ||
                 result.error.includes('会话未找到'))) {
                 alert(`连接已断开，请重新连接服务器`);
+
+                // 可能需要切换到终端模式
+                const terminalTab = document.querySelector('.tab[data-tab="terminal"]');
+                if (terminalTab) {
+                    terminalTab.click();
+                }
             } else {
                 alert(`无法访问目录 ${path}: ${result.error}`);
             }
@@ -1527,6 +1561,12 @@ async function loadRemoteFiles(path) {
     } catch (error) {
         console.error('加载远程文件失败:', error);
         alert(`加载远程文件失败: ${error.message}`);
+
+        // 如果是致命错误，切换到终端标签
+        const terminalTab = document.querySelector('.tab[data-tab="terminal"]');
+        if (terminalTab) {
+            terminalTab.click();
+        }
     } finally {
         // Hide loading state
         showFileManagerLoading(false);
