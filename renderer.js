@@ -477,7 +477,7 @@ async function initSimpleTerminal(sessionId, existingSession = null, showBuffer 
                 }
             }
         }, 50);
-        
+
         // 恢复缓冲区数据
         if (showBuffer && existingSession && existingSession.buffer) {
             console.log(`[initSimpleTerminal] 恢复会话 ${sessionId} 的终端缓冲区`);
@@ -655,10 +655,14 @@ function resizeTerminal() {
 // =============================================
 
 // 改进会话切换功能
+// Replace the entire switchToSession function
 async function switchToSession(connectionId) {
     console.log(`[switchToSession] 开始切换到连接ID: ${connectionId} 的会话`);
 
-    // 创建加载指示器
+    // Clear file manager cache when switching sessions
+    clearFileManagerCache();
+
+    // Create loading indicator
     const loadingOverlay = document.createElement('div');
     loadingOverlay.className = 'loading-overlay';
     loadingOverlay.innerHTML = '<div class="spinner"></div><div class="loading-text">正在切换会话...</div>';
@@ -753,6 +757,22 @@ async function switchToSession(connectionId) {
             }),
             updateActiveConnectionItem(connectionId)
         ]);
+
+        // Reset file manager state to ensure it will reinitialize with the new connection
+        fileManagerInitialized = false;
+
+        // If the current active tab is the file manager, initialize it immediately
+        const activeTab = document.querySelector('.tab.active');
+        if (activeTab && activeTab.getAttribute('data-tab') === 'file-manager') {
+            // Show file manager loading state
+            showFileManagerLoading(true);
+
+            // Initialize with new session
+            setTimeout(() => {
+                initFileManager(sessionInfo.sessionId);
+                fileManagerInitialized = true;
+            }, 100);
+        }
 
         // 确保终端大小正确
         setTimeout(resizeTerminal, 100);
@@ -858,10 +878,27 @@ async function connectToSaved(id) {
             // 更新活跃连接项状态
             updateActiveConnectionItem(connection.id);
 
+            // Reset file manager state
+            fileManagerInitialized = false;
+
+            // 获取当前激活的标签
+            const currentActiveTab = document.querySelector('.tab.active');
+
+            // If file manager tab is active, initialize it now
+            if (currentActiveTab && currentActiveTab.getAttribute('data-tab') === 'file-manager') {
+                // Show loading state
+                showFileManagerLoading(true);
+
+                // Short delay to ensure session is ready
+                setTimeout(() => {
+                    initFileManager(result.sessionId);
+                    fileManagerInitialized = true;
+                }, 100);
+            }
+
             // 保持当前激活的标签类型
-            const activeTab = document.querySelector('.tab.active');
-            if (activeTab) {
-                activeTab.click();
+            if (currentActiveTab) {
+                currentActiveTab.click();
             }
         } else {
             alert(`连接失败: ${result.error}`);
@@ -1190,28 +1227,63 @@ function setupSSHClosedHandler() {
 let remoteFileCache = new Map(); // 远程文件缓存
 let localFileCache = new Map(); // 本地文件缓存
 
+// Replace the entire initFileManager function
 async function initFileManager(sessionId) {
     if (!sessionId) {
         console.error('无法初始化文件管理器：未连接到服务器');
         return;
     }
 
-    // 获取会话的远程工作目录
-    const remotePath = sessionManager.getRemotePath(sessionId);
+    // Clear any existing remote file list first
+    const remoteFilesTbody = document.querySelector('#remote-files tbody');
+    if (remoteFilesTbody) {
+        remoteFilesTbody.innerHTML = '';
+    }
+
+    // Get the session's remote working directory or set to root if not defined
+    let remotePath = '/';
+
+    // Try to get the path from session manager
+    const session = sessionManager.getSession(sessionId);
+    if (session && session.currentRemotePath) {
+        remotePath = session.currentRemotePath;
+    } else {
+        // Initialize the remote path in session manager
+        sessionManager.updateRemotePath(sessionId, remotePath);
+    }
+
     console.log(`初始化文件管理器，使用会话 ${sessionId} 的远程工作目录: ${remotePath}`);
 
-    // 加载远程文件
-    loadRemoteFiles(remotePath);
-
-    // 加载本地文件
-    if (lastLocalDirectory) {
-        loadLocalFiles(lastLocalDirectory);
-    } else {
-        // 默认加载用户主目录
-        window.api.file.getHomeDir().then(homeDir => {
-            loadLocalFiles(homeDir);
-        });
+    // Update remote path input
+    const remotePathInput = document.getElementById('remote-path');
+    if (remotePathInput) {
+        remotePathInput.value = remotePath;
     }
+
+    // Load remote files
+    await loadRemoteFiles(remotePath);
+
+    // Clear any existing local file list
+    const localFilesTbody = document.querySelector('#local-files tbody');
+    if (localFilesTbody) {
+        localFilesTbody.innerHTML = '';
+    }
+
+    // Load local files
+    if (lastLocalDirectory) {
+        await loadLocalFiles(lastLocalDirectory);
+    } else {
+        // Default to user home directory
+        try {
+            const homeDir = await window.api.file.getHomeDir();
+            await loadLocalFiles(homeDir);
+        } catch (error) {
+            console.error('获取用户主目录失败:', error);
+        }
+    }
+
+    // Hide loading indicator
+    showFileManagerLoading(false);
 }
 
 // 加载本地文件
@@ -1338,9 +1410,9 @@ function displayRemoteFiles(files, currentPath) {
             parentRow.appendChild(cell);
         }
 
-        parentRow.addEventListener('dblclick', () => {
+        parentRow.addEventListener('dblclick', async () => {
             const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
-            loadRemoteFiles(parentPath);
+            await loadRemoteFiles(parentPath);
         });
 
         tbody.appendChild(parentRow);
@@ -1393,48 +1465,70 @@ function displayRemoteFiles(files, currentPath) {
 }
 
 // 加载远程文件
+// Replace the entire loadRemoteFiles function
 async function loadRemoteFiles(path) {
     if (!currentSessionId) {
         console.error('无法加载远程文件：未连接到服务器');
+        showFileManagerLoading(false);
         return;
     }
 
     try {
-        // 规范化路径
+        // Normalize path
         path = path.replace(/\/+/g, '/');
         if (!path.startsWith('/')) {
             path = '/' + path;
         }
 
-        // 显示加载状态
+        // Show loading state
         showFileManagerLoading(true);
 
-        // 更新路径输入框
+        // Update path input
         const remotePathInput = document.getElementById('remote-path');
         if (remotePathInput) {
             remotePathInput.value = path;
         }
 
-        // 更新会话的远程工作目录
+        // Update session's remote working directory
         sessionManager.updateRemotePath(currentSessionId, path);
 
+        // Log the request
+        console.log(`请求远程文件列表: 会话ID ${currentSessionId}, 路径 ${path}`);
+
+        // Make the request
         const result = await window.api.file.list(currentSessionId, path);
+
         if (result.success) {
-            // 更新缓存
+            // Update cache
             const cacheKey = `${currentSessionId}:${path}`;
             remoteFileCache.set(cacheKey, result.files);
             console.log('更新远程文件缓存:', cacheKey);
 
+            // Display files
             displayRemoteFiles(result.files, path);
         } else {
             console.error('获取远程文件失败:', result.error);
-            alert(`无法访问目录 ${path}: ${result.error}`);
+
+            // Check if it's a connection error
+            if (result.error && (result.error.includes('not connected') ||
+                result.error.includes('connection closed') ||
+                result.error.includes('会话未找到'))) {
+                alert(`连接已断开，请重新连接服务器`);
+            } else {
+                alert(`无法访问目录 ${path}: ${result.error}`);
+            }
+
+            // If it was a root directory error, try to reset to root
+            if (path !== '/') {
+                console.log('尝试重置到根目录');
+                await loadRemoteFiles('/');
+            }
         }
     } catch (error) {
         console.error('加载远程文件失败:', error);
         alert(`加载远程文件失败: ${error.message}`);
     } finally {
-        // 隐藏加载状态
+        // Hide loading state
         showFileManagerLoading(false);
     }
 }
@@ -2008,6 +2102,22 @@ const extraCSS = `
     color: #333;
 }
 `;
+
+function clearFileManagerCache() {
+    // Clear remote file cache
+    remoteFileCache.clear();
+
+    // Reset file manager initialized flag
+    fileManagerInitialized = false;
+
+    // Clear remote file list display
+    const remoteFilesTbody = document.querySelector('#remote-files tbody');
+    if (remoteFilesTbody) {
+        remoteFilesTbody.innerHTML = '';
+    }
+
+    console.log('已清除文件管理器缓存');
+}
 
 // =============================================
 // 第8部分：事件监听和初始化
