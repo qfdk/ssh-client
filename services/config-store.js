@@ -1,42 +1,90 @@
 const Store = require('electron-store');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
 class ConfigStore {
   constructor() {
+    // Create ~/.sshl directory if it doesn't exist
+    this.sshlDir = path.join(os.homedir(), '.sshl');
+    if (!fs.existsSync(this.sshlDir)) {
+      fs.mkdirSync(this.sshlDir, { mode: 0o700 }); // Set permissions to only allow owner access
+    }
+
+    // Main configuration store (non-sensitive data)
     this.store = new Store({
       name: 'ssh-client-config',
+      cwd: this.sshlDir,
       defaults: {
         connections: []
+      }
+    });
+
+    // Sensitive data store (passwords, keys)
+    this.sensitiveStore = new Store({
+      name: 'credentials',
+      cwd: this.sshlDir, // Store in ~/.sshl directory
+      encryptionKey: 'sshl-secure-credentials', // Basic encryption
+      defaults: {
+        credentials: {}
       }
     });
   }
 
   getConnections() {
-    return this.store.get('connections') || [];
+    const connections = this.store.get('connections') || [];
+
+    // Merge with sensitive data when requested
+    return connections.map(conn => {
+      const id = conn.id;
+      const credentials = this.sensitiveStore.get(`credentials.${id}`);
+
+      if (credentials) {
+        // Merge credentials with connection info
+        return {
+          ...conn,
+          password: credentials.password || '',
+          passphrase: credentials.passphrase || ''
+        };
+      }
+
+      return conn;
+    });
   }
 
   saveConnection(connection) {
-    const connections = this.getConnections();
+    const connections = this.store.get('connections') || [];
+
+    // Separate sensitive data
+    const sensitiveData = {
+      password: connection.password || '',
+      passphrase: connection.passphrase || ''
+    };
+
+    // Create connection without sensitive data
+    const cleanConnection = { ...connection };
+    delete cleanConnection.password;
+    delete cleanConnection.passphrase;
 
     // If the connection has an ID, update it
     if (connection.id) {
       const index = connections.findIndex(c => c.id === connection.id);
       if (index !== -1) {
-        // 保存密码，如果新连接没有密码但是旧连接有密码，保留旧密码
-        if (!connection.password && connections[index].password) {
-          connection.password = connections[index].password;
-        }
-        // 同样处理私钥密码
-        if (!connection.passphrase && connections[index].passphrase) {
-          connection.passphrase = connections[index].passphrase;
-        }
-        connections[index] = connection;
+        connections[index] = cleanConnection;
       } else {
-        connections.push(connection);
+        connections.push(cleanConnection);
       }
+
+      // Save sensitive data separately
+      this.sensitiveStore.set(`credentials.${connection.id}`, sensitiveData);
+
     } else {
       // New connection - assign an ID
-      connection.id = Date.now().toString();
-      connections.push(connection);
+      cleanConnection.id = Date.now().toString();
+      connections.push(cleanConnection);
+
+      // Save sensitive data separately
+      this.sensitiveStore.set(`credentials.${cleanConnection.id}`, sensitiveData);
     }
 
     this.store.set('connections', connections);
@@ -58,6 +106,10 @@ class ConfigStore {
 
       const filtered = connections.filter(c => c && c.id !== id);
       this.store.set('connections', filtered);
+
+      // Also delete sensitive data
+      this.sensitiveStore.delete(`credentials.${id}`);
+
       return true;
     } catch (error) {
       console.error('删除连接失败:', error);

@@ -247,13 +247,13 @@ ipcMain.handle('ssh:send-data', async (event, {sessionId, data}) => {
         // 确保data是字符串
         const dataStr = typeof data === 'string' ? data : data.toString('utf8');
         const result = await sshService.sendData(sessionId, dataStr);
-        
+
         // 检查结果是否成功
         if (result && result.success === false) {
             console.log(`[sendData] 发送数据失败: ${result.error}`);
             return {success: false, error: result.error || '发送数据失败'};
         }
-        
+
         return {success: true};
     } catch (error) {
         console.error('发送数据错误:', error);
@@ -333,13 +333,13 @@ ipcMain.handle('ssh:resize', async (event, {sessionId, cols, rows}) => {
         }
 
         const result = await sshService.resize(sessionId, cols, rows);
-        
+
         // 检查结果是否成功
         if (result && result.success === false) {
             console.log(`[resize] 调整终端大小失败: ${result.error}`);
             return {success: false, error: result.error || '调整终端大小失败'};
         }
-        
+
         return {success: true};
     } catch (error) {
         console.error('调整终端大小错误:', error);
@@ -356,13 +356,13 @@ ipcMain.handle('ssh:refresh-prompt', async (event, sessionId) => {
         }
 
         const result = await sshService.refreshPrompt(sessionId);
-        
+
         // 检查结果是否成功
         if (result && result.success === false) {
             console.log(`[refreshPrompt] 刷新命令提示符失败: ${result.error}`);
             return {success: false, error: result.error || '刷新命令提示符失败'};
         }
-        
+
         return {success: true};
     } catch (error) {
         console.error('刷新命令提示符错误:', error);
