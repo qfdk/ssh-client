@@ -1,4 +1,4 @@
-const {app, BrowserWindow, ipcMain, dialog} = require('electron');
+const {app, BrowserWindow, ipcMain, dialog, protocol} = require('electron');
 const path = require('path');
 const ejs = require('ejs');
 const fs = require('fs');
@@ -13,6 +13,18 @@ const configStore = new ConfigStore();
 
 let mainWindow;
 
+// Register a custom protocol for serving local assets
+app.whenReady().then(() => {
+    protocol.registerFileProtocol('app', (request, callback) => {
+        const url = request.url.replace('app://', '');
+        try {
+            return callback(path.normalize(`${__dirname}/${url}`));
+        } catch (error) {
+            console.error('Protocol error:', error);
+        }
+    });
+});
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1200,
@@ -26,14 +38,31 @@ function createWindow() {
         }
     });
 
-    // 创建临时HTML文件
-    const tempHtmlPath = path.join(__dirname, 'temp.html');
+    // 创建临时目录确保存在
+    const tempDir = path.join(os.tmpdir(), 'sshl-temp');
+    if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+    }
 
+    // 使用系统临时目录生成临时文件
+    const tempHtmlPath = path.join(tempDir, `index-${Date.now()}.html`);
+
+    // 修改CSS路径为绝对路径
+    const cssFiles = [
+        'assets/css/main.css',
+        'assets/css/connection-dialog.css',
+        'assets/css/file-manager.css',
+        'assets/css/terminal.css',
+        'assets/css/buttons.css'
+    ];
+
+    // 使用EJS渲染HTML内容
     ejs.renderFile(
         path.join(__dirname, 'views', 'index.ejs'),
         {
             title: 'SSHL客户端',
-            connections: configStore.getConnections() || []
+            connections: configStore.getConnections() || [],
+            basePath: __dirname
         },
         {root: path.join(__dirname, 'views')},
         (err, html) => {
@@ -42,19 +71,47 @@ function createWindow() {
                 return;
             }
 
+            // 替换相对路径为app://路径
+            let modifiedHtml = html.replace(
+                /(href|src)=['"]([^"']+)['"]/g,
+                (match, attr, url) => {
+                    // 忽略已经是绝对路径或http/https的链接
+                    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('app://')) {
+                        return match;
+                    }
+
+                    // 转换到app://协议
+                    return `${attr}="app://${url}"`;
+                }
+            );
+
             // 写入临时文件
-            fs.writeFileSync(tempHtmlPath, html);
+            fs.writeFileSync(tempHtmlPath, modifiedHtml);
 
             // 加载文件
-            mainWindow.loadFile(tempHtmlPath);
+            mainWindow.loadURL(`file://${tempHtmlPath}`);
 
             // 窗口准备好后最大化并显示
             mainWindow.once('ready-to-show', () => {
                 mainWindow.maximize();
                 mainWindow.show();
             });
+
+            // 窗口关闭时删除临时文件
+            mainWindow.on('closed', () => {
+                try {
+                    if (fs.existsSync(tempHtmlPath)) {
+                        fs.unlinkSync(tempHtmlPath);
+                    }
+                } catch (e) {
+                    console.error('删除临时文件失败:', e);
+                }
+            });
         }
     );
+
+    // 打开开发者工具帮助调试
+    mainWindow.webContents.openDevTools();
 }
 
 app.whenReady().then(() => {
@@ -68,6 +125,9 @@ app.whenReady().then(() => {
 app.on('window-all-closed', function () {
     if (process.platform !== 'darwin') app.quit();
 });
+
+// Rest of your IPC handlers remain the same as before
+// ...
 
 // IPC Handlers for file operations
 ipcMain.handle('file:get-home-dir', async () => {

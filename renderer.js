@@ -355,68 +355,132 @@ const sessionManager = {
 // =============================================
 
 // 手动创建终端
+// Replacement for the createXterm function
 function createXterm(containerId, options = {}) {
-    // 获取xterm.js脚本
-    const xtermScript = document.createElement('script');
-    xtermScript.src = 'node_modules/xterm/lib/xterm.js';
-    document.head.appendChild(xtermScript);
-
-    // 获取fit插件脚本
-    const fitScript = document.createElement('script');
-    fitScript.src = 'node_modules/xterm-addon-fit/lib/xterm-addon-fit.js';
-    document.head.appendChild(fitScript);
-
-    // 创建终端
+    // Don't try to load xterm.js from scripts again, assume it's been loaded via main window
     const container = document.getElementById(containerId);
 
-    // 等待脚本加载完成
-    return new Promise((resolve, reject) => {
-        fitScript.onload = () => {
+    if (!window.Terminal || !window.FitAddon) {
+        console.log('Loading Terminal and FitAddon scripts dynamically');
+        // Create a promise to load scripts dynamically
+        return new Promise((resolve, reject) => {
+            // First load xterm.js
+            const xtermScript = document.createElement('script');
+            xtermScript.src = 'app://node_modules/xterm/lib/xterm.js';
+
+            // Load styles
+            const xtermStylesheet = document.createElement('link');
+            xtermStylesheet.rel = 'stylesheet';
+            xtermStylesheet.href = 'app://node_modules/xterm/css/xterm.css';
+            document.head.appendChild(xtermStylesheet);
+
+            xtermScript.onload = () => {
+                // After xterm.js loads, load the fit addon
+                const fitScript = document.createElement('script');
+                fitScript.src = 'app://node_modules/xterm-addon-fit/lib/xterm-addon-fit.js';
+
+                fitScript.onload = () => {
+                    try {
+                        // Create terminal instance
+                        const term = new Terminal({
+                            cursorBlink: true,
+                            cursorStyle: 'bar',
+                            fontSize: 14,
+                            fontFamily: 'monospace',
+                            theme: {
+                                background: '#1e1e1e',
+                                foreground: '#f0f0f0',
+                                cursor: '#ffffff'
+                            },
+                            allowTransparency: false,
+                            rendererType: 'dom',
+                            ...options
+                        });
+
+                        // Create fit addon
+                        const fitAddon = new FitAddon.FitAddon();
+                        term.loadAddon(fitAddon);
+
+                        term.open(container);
+                        fitAddon.fit();
+
+                        // Add window resize event listener
+                        window.addEventListener('resize', () => {
+                            fitAddon.fit();
+                        });
+
+                        // Force delay to ensure proper sizing
+                        setTimeout(() => {
+                            fitAddon.fit();
+                        }, 100);
+
+                        resolve({term, fitAddon});
+                    } catch (error) {
+                        console.error('创建终端错误:', error);
+                        reject(error);
+                    }
+                };
+
+                fitScript.onerror = (error) => {
+                    console.error('加载 FitAddon 失败:', error);
+                    reject(new Error('Failed to load xterm-addon-fit.js'));
+                };
+
+                document.head.appendChild(fitScript);
+            };
+
+            xtermScript.onerror = (error) => {
+                console.error('加载 xterm.js 失败:', error);
+                reject(new Error('Failed to load xterm.js'));
+            };
+
+            document.head.appendChild(xtermScript);
+        });
+    } else {
+        // Scripts already loaded, create terminal directly
+        return new Promise((resolve, reject) => {
             try {
-                // 创建终端实例
+                // Create terminal instance
                 const term = new Terminal({
                     cursorBlink: true,
-                    cursorStyle: 'bar',    // 设置为竖线光标
+                    cursorStyle: 'bar',
                     fontSize: 14,
                     fontFamily: 'monospace',
                     theme: {
                         background: '#1e1e1e',
                         foreground: '#f0f0f0',
-                        cursor: '#ffffff'  // 添加光标颜色
+                        cursor: '#ffffff'
                     },
                     allowTransparency: false,
-                    rendererType: 'dom',   // 使用DOM渲染器可能更好地支持自定义样式
+                    rendererType: 'dom',
                     ...options
                 });
 
-                // 创建fit插件
+                // Create fit addon
                 const fitAddon = new FitAddon.FitAddon();
                 term.loadAddon(fitAddon);
 
                 term.open(container);
                 fitAddon.fit();
 
-                // 添加窗口大小变化事件监听
+                // Add window resize event listener
                 window.addEventListener('resize', () => {
                     fitAddon.fit();
                 });
 
-                // 强制延迟重新调整大小，确保正确渲染
+                // Force delay to ensure proper sizing
                 setTimeout(() => {
                     fitAddon.fit();
                 }, 100);
 
                 resolve({term, fitAddon});
             } catch (error) {
+                console.error('创建终端错误:', error);
                 reject(error);
             }
-        };
-
-        xtermScript.onerror = reject;
-        fitScript.onerror = reject;
-    });
+        });
+    }
 }
-
 // 存储当前终端的数据处理函数，以便在销毁终端前移除
 let currentTerminalDataHandler = null;
 
