@@ -543,7 +543,8 @@ async function initSimpleTerminal(sessionId, existingSession = null, showBuffer 
         } catch (err) {
             console.error(`[initSimpleTerminal] 注册终端数据处理程序出错:`, err);
             // 创建一个空函数作为替代
-            currentTerminalDataHandlerDisposer = () => {};
+            currentTerminalDataHandlerDisposer = () => {
+            };
         }
 
         // 创建标签
@@ -976,40 +977,58 @@ async function connectToSaved(id) {
     }
 }
 
-// 在renderer.js文件中添加这两个函数
-
 // 处理连接项鼠标悬停
 function handleItemHover(event) {
-    // 只有当侧边栏处于折叠状态时才显示工具提示
+    // Only show tooltip when sidebar is collapsed
     if (!sidebar.classList.contains('collapsed')) {
         return;
     }
 
-    // 获取连接名称
+    // Get connection name
     const connectionName = event.currentTarget.getAttribute('data-name');
     if (!connectionName) return;
 
-    // 创建工具提示元素
+    // Create tooltip element if it doesn't exist
     let tooltip = document.getElementById('connection-tooltip');
     if (!tooltip) {
         tooltip = document.createElement('div');
         tooltip.id = 'connection-tooltip';
         tooltip.className = 'custom-tooltip';
+
+        // Add a separate element for the arrow
+        const arrow = document.createElement('div');
+        arrow.className = 'tooltip-arrow';
+        tooltip.appendChild(arrow);
+
         document.body.appendChild(tooltip);
     }
 
-    // 设置工具提示内容和位置
-    tooltip.textContent = connectionName;
+    // Set tooltip content - make sure we don't overwrite the arrow
+    // Clear existing content except the arrow
+    const arrow = tooltip.querySelector('.tooltip-arrow');
+    tooltip.innerHTML = '';
+    tooltip.appendChild(arrow);
 
-    // 计算位置 - 获取连接项的位置信息
-    const rect = event.currentTarget.getBoundingClientRect();
-    tooltip.style.top = `${rect.top + rect.height / 2}px`;
-    tooltip.style.left = `${rect.right + 10}px`; // 距离连接项右侧10px
+    // Add text as a separate element
+    const textSpan = document.createElement('span');
+    textSpan.textContent = connectionName;
+    tooltip.appendChild(textSpan);
 
-    // 显示工具提示
+    // Calculate position
+    const itemRect = event.currentTarget.getBoundingClientRect();
+    const sidebarRect = sidebar.getBoundingClientRect();
+
+    // Position horizontally to the right of the sidebar with spacing
+    tooltip.style.left = `${sidebarRect.right + 15}px`;
+
+    // Align vertically with the center of the item
+    tooltip.style.top = `${itemRect.top + (itemRect.height / 2)}px`;
+    tooltip.style.transform = 'translateY(-50%)'; // Center vertically using transform
+
+    // Show tooltip with slight delay for transition effect
     setTimeout(() => {
         tooltip.classList.add('visible');
-    }, 10); // 短暂延迟，确保CSS过渡效果生效
+    }, 10);
 }
 
 // 处理连接项鼠标离开
@@ -2207,6 +2226,44 @@ const extraCSS = `
 }
 `;
 
+const tooltipCSSComplete = `
+/* Tooltip styles */
+.custom-tooltip {
+    position: fixed;
+    background-color: #333;
+    color: white;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+    white-space: nowrap;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    max-width: 200px;
+    overflow: visible; /* Changed to allow arrow to be visible outside the box */
+    margin: 0;
+}
+
+.custom-tooltip.visible {
+    opacity: 1;
+}
+
+/* Dedicated arrow element */
+.tooltip-arrow {
+    position: absolute;
+    left: -5px;
+    top: 50%;
+    width: 0;
+    height: 0;
+    transform: translateY(-50%);
+    border-style: solid;
+    border-width: 5px 5px 5px 0;
+    border-color: transparent #333 transparent transparent;
+}
+`;
+
 function clearFileManagerCache() {
     // Clear remote file cache
     remoteFileCache.clear();
@@ -2239,7 +2296,7 @@ document.addEventListener('click', async function (event) {
                 if (window.api && window.api.config) {
                     const result = await window.api.config.deleteConnection(id);
                     if (result) {
-                        loadConnections();
+                        await loadConnections();
                     }
                 }
             }
@@ -2272,6 +2329,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ${terminalCSS}
       ${menuCSS}
       ${extraCSS}
+      ${tooltipCSSComplete}
     `;
     document.head.appendChild(customStyle);
 
@@ -2359,10 +2417,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 300)); // Add 300ms debounce delay
     });
 
-    // 侧边栏折叠/展开
+// 侧边栏折叠/展开
     if (sidebarToggle) {
         sidebarToggle.addEventListener('click', () => {
             sidebar.classList.toggle('collapsed');
+
+            // Update arrow direction
+            const arrowIcon = sidebarToggle.querySelector('svg path');
+            if (sidebar.classList.contains('collapsed')) {
+                // Sidebar is collapsed, point arrow right (>)
+                arrowIcon.setAttribute('d', 'M9 18l6-6-6-6');
+            } else {
+                // Sidebar is expanded, point arrow left (<)
+                arrowIcon.setAttribute('d', 'M15 18l-6-6 6-6');
+            }
+
             // 侧边栏展开时，隐藏任何可能显示的工具提示
             if (!sidebar.classList.contains('collapsed')) {
                 const tooltip = document.getElementById('connection-tooltip');
@@ -2370,6 +2439,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     tooltip.classList.remove('visible');
                 }
             }
+
             // 侧边栏变化后调整终端大小
             setTimeout(resizeTerminal, 300);
         });
