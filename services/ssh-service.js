@@ -118,8 +118,28 @@ class SshService extends EventEmitter {
                             if (session) {
                                 // 标记会话为非活跃，但不删除会话
                                 session.active = false;
+                                // 将stream设置为null，以便后续重新连接
+                                session.stream = null;
+                                // 清理连接资源
+                                if (session.conn) {
+                                    session.conn.end();
+                                    session.conn = null;
+                                }
+                                // 清理共享连接
+                                const connectionKey = session.connectionKey;
+                                const sharedConnection = this.sharedConnections.get(connectionKey);
+                                if (sharedConnection) {
+                                    sharedConnection.refCount--;
+                                    if (sharedConnection.refCount <= 0) {
+                                        this.sharedConnections.delete(connectionKey);
+                                    }
+                                }
+                                // 清理连接ID映射
+                                if (session.connectionId) {
+                                    this.connectionToSession.delete(session.connectionId);
+                                }
                                 this.sessions.set(sessionId, session);
-                                console.log(`会话 ${sessionId} 已关闭，标记为非活跃`);
+                                console.log(`会话 ${sessionId} 已关闭，标记为非活跃，stream已设为null`);
                             }
                         });
 
@@ -234,10 +254,41 @@ class SshService extends EventEmitter {
     }
 
     async sendData(sessionId, data) {
+        console.log(`[sendData] 向会话 ${sessionId} 发送数据`);
         const session = this.sessions.get(sessionId);
-        if (!session || !session.stream) {
-            console.error(`[sendData] 会话 ${sessionId} 未找到或shell未启动`);
-            throw new Error('会话未找到或shell未启动');
+        if (!session) {
+            console.error(`[sendData] 会话 ${sessionId} 未找到`);
+            // 尝试查找是否有相关的连接ID
+            for (const [connId, sessId] of this.connectionToSession.entries()) {
+                if (sessId === sessionId) {
+                    console.log(`[sendData] 尝试通过连接ID ${connId} 重新激活会话`);
+                    try {
+                        const result = await this.activateSession(sessionId);
+                        if (result.success) {
+                            return this.sendData(result.sessionId, data);
+                        }
+                    } catch (err) {
+                        console.error(`[sendData] 尝试重新激活会话失败:`, err);
+                    }
+                    break;
+                }
+            }
+            return { success: false, error: '会话未找到' };
+        }
+        
+        if (!session.stream) {
+            console.error(`[sendData] 会话 ${sessionId} 的shell未启动`);
+            try {
+                // 尝试重新激活会话
+                const result = await this.activateSession(sessionId);
+                if (result.success) {
+                    return this.sendData(result.sessionId, data);
+                }
+                return { success: false, error: 'shell未启动且无法重新激活会话' };
+            } catch (err) {
+                console.error(`[sendData] 尝试重新激活会话失败:`, err);
+                return { success: false, error: '重新激活会话失败: ' + err.message };
+            }
         }
 
         if (!session.active) {
@@ -249,10 +300,10 @@ class SshService extends EventEmitter {
 
         try {
             session.stream.write(dataStr);
-            return true;
+            return { success: true };
         } catch (err) {
             console.error(`[sendData] 向会话 ${sessionId} 发送数据失败:`, err);
-            throw err;
+            return { success: false, error: '发送数据失败: ' + err.message };
         }
     }
 
@@ -272,10 +323,56 @@ class SshService extends EventEmitter {
 
         // 如果存在stream，刷新命令提示符
         if (session.stream) {
-            return true;
+            return { success: true, sessionId };
         } else {
-            console.warn(`[activateSession] 会话 ${sessionId} 没有可用的stream，但仍然继续执行`);
-            return true; // 即使没有stream也返回成功，避免阻止连接流程
+            console.warn(`[activateSession] 会话 ${sessionId} 没有可用的stream，需要重新建立连接`);
+            
+            // 如果没有可用的stream，尝试重新建立连接
+            try {
+                if (!session.details) {
+                    console.error(`[activateSession] 会话 ${sessionId} 没有连接详情，无法重新连接`);
+                    return { success: false };
+                }
+                
+                // 使用原有的连接详情重新连接
+                console.log(`[activateSession] 尝试为会话 ${sessionId} 重新建立连接`);
+                const result = await this.connect(session.details);
+                
+                // 连接成功后，删除旧会话，保留新会话的映射关系
+                if (result && result.sessionId) {
+                    const newSessionId = result.sessionId;
+                    console.log(`[activateSession] 重新连接成功，新会话ID: ${newSessionId}`);
+                    
+                    // 如果存在连接ID，更新映射关系
+                    if (session.connectionId) {
+                        this.connectionToSession.set(session.connectionId, newSessionId);
+                    }
+                    
+                    // 在删除旧会话之前，确保所有引用都已更新
+                    // 复制旧会话的所有属性到新会话
+                    const oldSession = this.sessions.get(sessionId);
+                    const newSession = this.sessions.get(newSessionId);
+                    if (oldSession && newSession) {
+                        // 保留新会话的conn和stream，但复制其他属性
+                        const conn = newSession.conn;
+                        const stream = newSession.stream;
+                        Object.assign(newSession, oldSession);
+                        newSession.conn = conn;
+                        newSession.stream = stream;
+                        newSession.active = true;
+                        this.sessions.set(newSessionId, newSession);
+                    }
+                    
+                    // 删除旧会话
+                    this.sessions.delete(sessionId);
+                    
+                    return { success: true, sessionId: newSessionId };
+                }
+                return { success: false };
+            } catch (error) {
+                console.error(`[activateSession] 重新连接失败:`, error);
+                return { success: false };
+            }
         }
     }
 
@@ -284,9 +381,48 @@ class SshService extends EventEmitter {
     async refreshPrompt(sessionId) {
         console.log(`[refreshPrompt] 开始刷新会话 ${sessionId} 的命令提示符`);
         const session = this.sessions.get(sessionId);
-        if (!session || !session.stream) {
-            console.error(`[refreshPrompt] 会话 ${sessionId} 未找到或shell未启动`);
-            throw new Error('会话未找到或shell未启动');
+        if (!session) {
+            console.error(`[refreshPrompt] 会话 ${sessionId} 未找到`);
+            // 检查是否有连接ID可以用来重新激活会话
+            for (const [connId, sessId] of this.connectionToSession.entries()) {
+                if (sessId === sessionId) {
+                    console.log(`[refreshPrompt] 尝试通过连接ID ${connId} 重新激活会话`);
+                    try {
+                        // 查找连接详情
+                        for (const [sid, sess] of this.sessions.entries()) {
+                            if (sess.connectionId === connId) {
+                                console.log(`[refreshPrompt] 找到相关会话 ${sid}，尝试使用其连接详情`);
+                                if (sess.details) {
+                                    const result = await this.activateSession(sid);
+                                    if (result.success) {
+                                        return this.refreshPrompt(result.sessionId);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    } catch (err) {
+                        console.error(`[refreshPrompt] 尝试重新激活会话失败:`, err);
+                    }
+                    break;
+                }
+            }
+            return { success: false, error: '会话未找到' };
+        }
+        
+        if (!session.stream) {
+            console.error(`[refreshPrompt] 会话 ${sessionId} 的shell未启动`);
+            try {
+                // 尝试重新激活会话
+                const result = await this.activateSession(sessionId);
+                if (result.success) {
+                    return this.refreshPrompt(result.sessionId);
+                }
+                return { success: false, error: 'shell未启动且无法重新激活会话' };
+            } catch (err) {
+                console.error(`[refreshPrompt] 尝试重新激活会话失败:`, err);
+                return { success: false, error: '重新激活会话失败: ' + err.message };
+            }
         }
 
         try {
@@ -294,22 +430,44 @@ class SshService extends EventEmitter {
             session.stream.write('clear\r');
 
             console.log(`[refreshPrompt] 已发送clear命令到会话 ${sessionId}`);
-            return true;
+            return { success: true };
         } catch (err) {
             console.error(`[refreshPrompt] 发送clear命令失败:`, err);
-            throw err;
+            return { success: false, error: '发送clear命令失败: ' + err.message };
         }
     }
 
     // 新增方法：调整终端大小
     async resize(sessionId, cols, rows) {
+        console.log(`[resize] 调整会话 ${sessionId} 的终端大小为 ${cols}x${rows}`);
         const session = this.sessions.get(sessionId);
-        if (!session || !session.stream) {
-            throw new Error('会话未找到或shell未启动');
+        if (!session) {
+            console.error(`[resize] 会话 ${sessionId} 未找到`);
+            return { success: false, error: '会话未找到' };
+        }
+        
+        if (!session.stream) {
+            console.error(`[resize] 会话 ${sessionId} 的shell未启动`);
+            try {
+                // 尝试重新激活会话
+                const result = await this.activateSession(sessionId);
+                if (result.success) {
+                    return this.resize(result.sessionId, cols, rows);
+                }
+                return { success: false, error: 'shell未启动且无法重新激活会话' };
+            } catch (err) {
+                console.error(`[resize] 尝试重新激活会话失败:`, err);
+                return { success: false, error: '重新激活会话失败: ' + err.message };
+            }
         }
 
-        session.stream.setWindow(rows, cols, 0, 0);
-        return true;
+        try {
+            session.stream.setWindow(rows, cols, 0, 0);
+            return { success: true };
+        } catch (err) {
+            console.error(`[resize] 调整终端大小失败:`, err);
+            return { success: false, error: '调整终端大小失败: ' + err.message };
+        }
     }
 
     async executeCommand(sessionId, command) {

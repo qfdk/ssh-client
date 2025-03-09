@@ -42,6 +42,7 @@ let isConnecting = false; // 连接中状态标志
 let loadingOverlay = null; // 加载遮罩元素
 let lastLocalDirectory = null; // 记住上次的本地目录
 let fileManagerInitialized = false; // 文件管理器是否已初始化
+let currentTerminalDataHandlerDisposer = null; // 当前终端数据处理函数的销毁器
 
 console.log('Renderer script loaded');
 
@@ -108,9 +109,14 @@ function toggleAuthFields() {
     if (authType === 'password') {
         passwordAuthFields.classList.remove('hidden');
         privateKeyAuthFields.forEach(field => field.classList.add('hidden'));
+        // 清除私钥相关字段
+        document.getElementById('conn-private-key-path').value = '';
+        document.getElementById('conn-passphrase').value = '';
     } else {
         passwordAuthFields.classList.add('hidden');
         privateKeyAuthFields.forEach(field => field.classList.remove('hidden'));
+        // 清除密码字段
+        document.getElementById('conn-password').value = '';
     }
 }
 
@@ -229,6 +235,16 @@ const sessionManager = {
     removeSession(sessionId) {
         console.log(`移除会话: ${sessionId}`);
         this.sessions.delete(sessionId);
+    },
+
+    // 更新会话ID（用于重新连接后的会话ID更新）
+    updateSessionId(oldSessionId, newSessionId) {
+        if (this.sessions.has(oldSessionId)) {
+            console.log(`更新会话ID: ${oldSessionId} -> ${newSessionId}`);
+            const sessionData = this.sessions.get(oldSessionId);
+            this.sessions.set(newSessionId, sessionData);
+            this.sessions.delete(oldSessionId);
+        }
     },
 
     // 会话是否存在且活跃
@@ -425,10 +441,15 @@ async function initSimpleTerminal(sessionId, existingSession = null, showBuffer 
             console.log(`[initSimpleTerminal] 正在销毁之前的终端实例`);
             try {
                 // 先移除数据处理程序
-                if (currentTerminalDataHandler) {
-                    activeTerminal.off('data', currentTerminalDataHandler);
+                if (currentTerminalDataHandlerDisposer && typeof currentTerminalDataHandlerDisposer === 'function') {
+                    currentTerminalDataHandlerDisposer(); // 调用dispose函数移除监听器
+                    currentTerminalDataHandlerDisposer = null;
                     currentTerminalDataHandler = null;
                     console.log(`[initSimpleTerminal] 已移除终端数据处理程序`);
+                } else if (currentTerminalDataHandlerDisposer) {
+                    console.warn(`[initSimpleTerminal] currentTerminalDataHandlerDisposer 不是函数，无法调用`);
+                    currentTerminalDataHandlerDisposer = null;
+                    currentTerminalDataHandler = null;
                 }
 
                 // 然后销毁终端
@@ -500,7 +521,30 @@ async function initSimpleTerminal(sessionId, existingSession = null, showBuffer 
             }
         };
 
-        term.onData(currentTerminalDataHandler);
+        // 保存dispose函数以便后续移除监听器
+        try {
+            const disposer = term.onData(currentTerminalDataHandler);
+            // 确保返回的是一个函数
+            if (typeof disposer === 'function') {
+                currentTerminalDataHandlerDisposer = disposer;
+                console.log(`[initSimpleTerminal] 成功注册终端数据处理程序`);
+            } else {
+                console.warn(`[initSimpleTerminal] term.onData 返回的不是函数: ${typeof disposer}`);
+                // 创建一个空函数作为替代
+                currentTerminalDataHandlerDisposer = () => {
+                    console.log('[initSimpleTerminal] 使用替代的dispose函数');
+                    // 尝试使用其他方式移除监听器
+                    if (term && term._events && term._events.data) {
+                        // 如果可能，直接清除事件监听器
+                        term._events.data = null;
+                    }
+                };
+            }
+        } catch (err) {
+            console.error(`[initSimpleTerminal] 注册终端数据处理程序出错:`, err);
+            // 创建一个空函数作为替代
+            currentTerminalDataHandlerDisposer = () => {};
+        }
 
         // 创建标签
         createTerminalTab(sessionId);
@@ -689,12 +733,20 @@ async function switchToSession(connectionId) {
             sessionManager.setSessionActive(currentSessionId, false);
 
             // 清理终端事件监听器
-            if (currentTerminalDataHandler) {
+            if (currentTerminalDataHandlerDisposer) {
                 try {
-                    activeTerminal.off('data', currentTerminalDataHandler);
+                    if (currentTerminalDataHandlerDisposer && typeof currentTerminalDataHandlerDisposer === 'function') {
+                        currentTerminalDataHandlerDisposer();
+                        console.log(`[switchToSession] 已移除终端数据处理程序`);
+                    } else if (currentTerminalDataHandlerDisposer) {
+                        console.warn(`[switchToSession] currentTerminalDataHandlerDisposer 不是函数，无法调用`);
+                    }
+                    currentTerminalDataHandlerDisposer = null;
                     currentTerminalDataHandler = null;
                 } catch (err) {
                     console.warn(`[switchToSession] 移除终端数据处理监听器出错:`, err);
+                    currentTerminalDataHandlerDisposer = null;
+                    currentTerminalDataHandler = null;
                 }
             }
         }
@@ -707,7 +759,17 @@ async function switchToSession(connectionId) {
 
         // 在后端激活会话
         try {
-            await window.api.ssh.activateSession(sessionInfo.sessionId);
+            const activateResult = await window.api.ssh.activateSession(sessionInfo.sessionId);
+            // 检查是否返回了新的会话ID（重新连接的情况）
+            if (activateResult && activateResult.sessionId && activateResult.sessionId !== sessionInfo.sessionId) {
+                console.log(`[switchToSession] 会话已重新连接，更新会话ID: ${activateResult.sessionId}`);
+                // 更新当前会话ID
+                currentSessionId = activateResult.sessionId;
+                // 更新会话管理器中的会话ID
+                sessionManager.updateSessionId(sessionInfo.sessionId, activateResult.sessionId);
+                // 更新sessionInfo引用
+                sessionInfo.sessionId = activateResult.sessionId;
+            }
         } catch (err) {
             console.warn(`[switchToSession] 在后端激活会话失败: ${err.message}`, err);
         }
@@ -729,8 +791,10 @@ async function switchToSession(connectionId) {
 
         // 刷新命令提示符
         try {
-            // 先确保会话活跃
-            await window.api.ssh.activateSession(sessionInfo.sessionId);
+            // 使用当前最新的会话ID，而不是原始的sessionInfo.sessionId
+            // 因为前面的激活操作可能已经更新了会话ID
+            console.log(`[switchToSession] 使用当前会话ID刷新提示符: ${currentSessionId}`);
+            const refreshResult = await window.api.ssh.refreshPrompt(currentSessionId);
 
             // 然后刷新提示符并等待一小段时间让命令执行
             await window.api.ssh.refreshPrompt(sessionInfo.sessionId);
@@ -2314,12 +2378,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // 新建连接
     newConnectionBtn?.addEventListener('click', () => {
         connectionDialog.classList.add('active');
+        // 重置认证方式为密码，并触发UI更新
+        document.getElementById('auth-type').value = 'password';
+        toggleAuthFields();
     });
 
     // 取消连接
     cancelConnectionBtn?.addEventListener('click', () => {
         connectionDialog.classList.remove('active');
         connectionForm.reset();
+        // 重置认证方式为密码，并触发UI更新
+        document.getElementById('auth-type').value = 'password';
+        toggleAuthFields();
     });
 
     // 提交连接表单

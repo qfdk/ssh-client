@@ -246,7 +246,14 @@ ipcMain.handle('ssh:send-data', async (event, {sessionId, data}) => {
 
         // 确保data是字符串
         const dataStr = typeof data === 'string' ? data : data.toString('utf8');
-        await sshService.sendData(sessionId, dataStr);
+        const result = await sshService.sendData(sessionId, dataStr);
+        
+        // 检查结果是否成功
+        if (result && result.success === false) {
+            console.log(`[sendData] 发送数据失败: ${result.error}`);
+            return {success: false, error: result.error || '发送数据失败'};
+        }
+        
         return {success: true};
     } catch (error) {
         console.error('发送数据错误:', error);
@@ -325,7 +332,14 @@ ipcMain.handle('ssh:resize', async (event, {sessionId, cols, rows}) => {
             return {success: false, error: 'SSH服务未初始化'};
         }
 
-        await sshService.resize(sessionId, cols, rows);
+        const result = await sshService.resize(sessionId, cols, rows);
+        
+        // 检查结果是否成功
+        if (result && result.success === false) {
+            console.log(`[resize] 调整终端大小失败: ${result.error}`);
+            return {success: false, error: result.error || '调整终端大小失败'};
+        }
+        
         return {success: true};
     } catch (error) {
         console.error('调整终端大小错误:', error);
@@ -341,7 +355,14 @@ ipcMain.handle('ssh:refresh-prompt', async (event, sessionId) => {
             return {success: false, error: 'SSH服务未初始化'};
         }
 
-        await sshService.refreshPrompt(sessionId);
+        const result = await sshService.refreshPrompt(sessionId);
+        
+        // 检查结果是否成功
+        if (result && result.success === false) {
+            console.log(`[refreshPrompt] 刷新命令提示符失败: ${result.error}`);
+            return {success: false, error: result.error || '刷新命令提示符失败'};
+        }
+        
         return {success: true};
     } catch (error) {
         console.error('刷新命令提示符错误:', error);
@@ -357,8 +378,15 @@ ipcMain.handle('ssh:activate-session', async (event, sessionId) => {
             return {success: false, error: 'SSH服务未初始化'};
         }
 
-        await sshService.activateSession(sessionId);
-        return {success: true};
+        const result = await sshService.activateSession(sessionId);
+        if (result.success) {
+            // 确保返回更新的会话ID，即使它与原始会话ID相同
+            console.log(`会话激活成功，返回会话ID: ${result.sessionId || sessionId}`);
+            return {success: true, sessionId: result.sessionId || sessionId};
+        } else {
+            console.error('会话激活失败:', result.error || '未知错误');
+            return {success: false, error: result.error || '会话激活失败'};
+        }
     } catch (error) {
         console.error('激活会话错误:', error);
         return {success: false, error: error.message};
