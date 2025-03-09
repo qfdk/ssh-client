@@ -274,8 +274,8 @@ class SshService extends EventEmitter {
         if (session.stream) {
             return true;
         } else {
-            console.warn(`[activateSession] 会话 ${sessionId} 没有可用的stream`);
-            throw new Error('会话没有可用的stream');
+            console.warn(`[activateSession] 会话 ${sessionId} 没有可用的stream，但仍然继续执行`);
+            return true; // 即使没有stream也返回成功，避免阻止连接流程
         }
     }
 

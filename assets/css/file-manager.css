@@ -115,28 +115,31 @@
     background-color: rgba(0, 0, 0, 0.05);
 }
 
-/* Transfer status bar - hidden by default */
+/* File transfer status styling */
 .transfer-status {
     height: 28px;
+    background-color: #f9fafb;
+    border-top: 1px solid var(--border-color);
     display: flex;
     align-items: center;
     padding: 0 12px;
-    background-color: #f9fafb;
-    border-top: 1px solid var(--border-color);
-    display: none; /* Hidden by default */
+    font-size: 12px;
+    color: var(--text-dark);
+    opacity: 0;
+    transition: opacity 0.3s;
 }
 
 .transfer-status.active {
-    display: flex; /* Show when active */
+    opacity: 1;
 }
 
 .transfer-progress {
-    width: 200px;
-    height: 8px;
+    width: 100px;
+    height: 6px;
     background-color: #e5e7eb;
-    border-radius: 4px;
+    border-radius: 3px;
+    margin-right: 10px;
     overflow: hidden;
-    margin-right: 12px;
 }
 
 .progress-bar {
@@ -147,8 +150,10 @@
 }
 
 .transfer-info {
-    font-size: 12px;
-    color: var(--secondary-color);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Context menu styling */

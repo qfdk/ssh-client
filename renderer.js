@@ -1092,7 +1092,7 @@ async function handleConnectionFormSubmit(e) {
             });
 
             // 关闭对话框
-            connectionDialog.classList.add('hidden');
+            connectionDialog.classList.remove('active');
             connectionForm.reset();
 
             // 初始化终端
@@ -1111,7 +1111,7 @@ async function handleConnectionFormSubmit(e) {
             await loadConnections();
 
             // 更新活跃连接项状态
-            updateActiveConnectionItem(connection.id);
+            updateActiveConnectionItem(generatedId);
 
             // 保持当前激活的标签类型
             const activeTab = document.querySelector('.tab.active');
@@ -2313,12 +2313,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 新建连接
     newConnectionBtn?.addEventListener('click', () => {
-        connectionDialog.classList.remove('hidden');
+        connectionDialog.classList.add('active');
     });
 
     // 取消连接
     cancelConnectionBtn?.addEventListener('click', () => {
-        connectionDialog.classList.add('hidden');
+        connectionDialog.classList.remove('active');
         connectionForm.reset();
     });
 
