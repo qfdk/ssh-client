@@ -275,7 +275,7 @@ class SshService extends EventEmitter {
             }
             return { success: false, error: '会话未找到' };
         }
-        
+
         if (!session.stream) {
             console.error(`[sendData] 会话 ${sessionId} 的shell未启动`);
             try {
@@ -326,28 +326,28 @@ class SshService extends EventEmitter {
             return { success: true, sessionId };
         } else {
             console.warn(`[activateSession] 会话 ${sessionId} 没有可用的stream，需要重新建立连接`);
-            
+
             // 如果没有可用的stream，尝试重新建立连接
             try {
                 if (!session.details) {
                     console.error(`[activateSession] 会话 ${sessionId} 没有连接详情，无法重新连接`);
                     return { success: false };
                 }
-                
+
                 // 使用原有的连接详情重新连接
                 console.log(`[activateSession] 尝试为会话 ${sessionId} 重新建立连接`);
                 const result = await this.connect(session.details);
-                
+
                 // 连接成功后，删除旧会话，保留新会话的映射关系
                 if (result && result.sessionId) {
                     const newSessionId = result.sessionId;
                     console.log(`[activateSession] 重新连接成功，新会话ID: ${newSessionId}`);
-                    
+
                     // 如果存在连接ID，更新映射关系
                     if (session.connectionId) {
                         this.connectionToSession.set(session.connectionId, newSessionId);
                     }
-                    
+
                     // 在删除旧会话之前，确保所有引用都已更新
                     // 复制旧会话的所有属性到新会话
                     const oldSession = this.sessions.get(sessionId);
@@ -362,10 +362,10 @@ class SshService extends EventEmitter {
                         newSession.active = true;
                         this.sessions.set(newSessionId, newSession);
                     }
-                    
+
                     // 删除旧会话
                     this.sessions.delete(sessionId);
-                    
+
                     return { success: true, sessionId: newSessionId };
                 }
                 return { success: false };
@@ -409,7 +409,7 @@ class SshService extends EventEmitter {
             }
             return { success: false, error: '会话未找到' };
         }
-        
+
         if (!session.stream) {
             console.error(`[refreshPrompt] 会话 ${sessionId} 的shell未启动`);
             try {
@@ -445,7 +445,7 @@ class SshService extends EventEmitter {
             console.error(`[resize] 会话 ${sessionId} 未找到`);
             return { success: false, error: '会话未找到' };
         }
-        
+
         if (!session.stream) {
             console.error(`[resize] 会话 ${sessionId} 的shell未启动`);
             try {
