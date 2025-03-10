@@ -1,13 +1,13 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const {contextBridge, ipcRenderer} = require('electron');
 
 // 只暴露基本IPC通信功能
 contextBridge.exposeInMainWorld('api', {
     ssh: {
         connect: (connectionDetails) => ipcRenderer.invoke('ssh:connect', connectionDetails),
         disconnect: (sessionId) => ipcRenderer.invoke('ssh:disconnect', sessionId),
-        execute: (sessionId, command) => ipcRenderer.invoke('ssh:execute', { sessionId, command }),
-        sendData: (sessionId, data) => ipcRenderer.invoke('ssh:send-data', { sessionId, data }),
-        resize: (sessionId, cols, rows) => ipcRenderer.invoke('ssh:resize', { sessionId, cols, rows }),
+        execute: (sessionId, command) => ipcRenderer.invoke('ssh:execute', {sessionId, command}),
+        sendData: (sessionId, data) => ipcRenderer.invoke('ssh:send-data', {sessionId, data}),
+        resize: (sessionId, cols, rows) => ipcRenderer.invoke('ssh:resize', {sessionId, cols, rows}),
         refreshPrompt: (sessionId) => ipcRenderer.invoke('ssh:refresh-prompt', sessionId),
         activateSession: (sessionId) => ipcRenderer.invoke('ssh:activate-session', sessionId),
         onData: (callback) => {
@@ -22,11 +22,21 @@ contextBridge.exposeInMainWorld('api', {
         }
     },
     file: {
-        list: (sessionId, path) => ipcRenderer.invoke('file:list', { sessionId, path }),
+        list: (sessionId, path) => ipcRenderer.invoke('file:list', {sessionId, path}),
         listLocal: (directory) => ipcRenderer.invoke('file:list-local', directory),
         getHomeDir: () => ipcRenderer.invoke('file:get-home-dir'),
-        upload: (sessionId, localPath, remotePath) => ipcRenderer.invoke('file:upload', { sessionId, localPath, remotePath }),
-        download: (sessionId, remotePath, localPath) => ipcRenderer.invoke('file:download', { sessionId, remotePath, localPath })
+        upload: (sessionId, localPath, remotePath) => ipcRenderer.invoke('file:upload', {
+            sessionId,
+            localPath,
+            remotePath
+        }),
+        download: (sessionId, remotePath, localPath) => ipcRenderer.invoke('file:download', {
+            sessionId,
+            remotePath,
+            localPath
+        }),
+        deleteLocal: (filePath) => ipcRenderer.invoke('file:delete-local', filePath),
+        deleteLocalDirectory: (dirPath) => ipcRenderer.invoke('file:delete-local-directory', dirPath)
     },
     config: {
         getConnections: () => ipcRenderer.invoke('config:get-connections'),

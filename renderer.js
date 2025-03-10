@@ -117,6 +117,28 @@ function toggleAuthFields() {
         privateKeyAuthFields.forEach(field => field.classList.remove('hidden'));
         // 清除密码字段
         document.getElementById('conn-password').value = '';
+
+        // 自动设置默认私钥路径为 ~/.ssh/id_rsa
+        if (window.api && window.api.file && window.api.file.getHomeDir) {
+            window.api.file.getHomeDir()
+                .then(homeDir => {
+                    // 确定正确的路径分隔符
+                    const separator = homeDir.includes('\\') ? '\\' : '/';
+
+                    // 使用正确的分隔符构建路径
+                    let defaultPrivateKeyPath;
+                    if (separator === '\\') {
+                        // Windows 风格路径
+                        defaultPrivateKeyPath = homeDir + '\\.ssh\\id_rsa';
+                    } else {
+                        // Unix 风格路径
+                        defaultPrivateKeyPath = homeDir + '/.ssh/id_rsa';
+                    }
+
+                    document.getElementById('conn-private-key-path').value = defaultPrivateKeyPath;
+                })
+                .catch(err => console.error('获取用户主目录失败:', err));
+        }
     }
 }
 
@@ -481,6 +503,7 @@ function createXterm(containerId, options = {}) {
         });
     }
 }
+
 // 存储当前终端的数据处理函数，以便在销毁终端前移除
 let currentTerminalDataHandler = null;
 
@@ -1473,13 +1496,7 @@ async function loadLocalFiles(directory) {
             console.error('获取本地文件失败:', result ? result.error : '未知错误');
 
             // 使用模拟数据作为备用
-            const dummyFiles = [
-                {name: '..', isDirectory: true, size: 0, modifyTime: new Date()},
-                {name: 'Documents', isDirectory: true, size: 0, modifyTime: new Date()},
-                {name: 'Downloads', isDirectory: true, size: 0, modifyTime: new Date()},
-                {name: 'example.txt', isDirectory: false, size: 1024, modifyTime: new Date()},
-                {name: 'image.jpg', isDirectory: false, size: 30720, modifyTime: new Date()}
-            ];
+            const dummyFiles = [];
             displayLocalFiles(dummyFiles, directory);
         }
 
@@ -1973,38 +1990,100 @@ function setupFileTransferListeners() {
         });
     }
 
+// Updated context menu handler for local files
     const localFilesTable = document.getElementById('local-files');
 
     if (localFilesTable) {
         localFilesTable.addEventListener('contextmenu', function (e) {
-            // 检查是否点击在文件行上
+            // Check if clicked on a file row
             const row = e.target.closest('tr');
             if (!row) return;
 
-            // 跳过上级目录
+            // Skip parent directory
             const fileName = row.querySelector('td:first-child').textContent.trim().replace(/^.+\s/, '');
             if (fileName === '..') return;
 
-            // 不处理目录
-            if (row.classList.contains('directory')) return;
-
-            // 文件名和路径
+            // File name and path
             const localPath = document.getElementById('local-path').value;
             const fullPath = path.join(localPath, fileName);
 
             const remotePath = document.getElementById('remote-path').value;
             const remoteFilePath = remotePath === '/' ? `/${fileName}` : `${remotePath}/${fileName}`;
 
-            // 创建右键菜单
+            // Create context menu based on whether it's a directory or file
             e.preventDefault();
-            showContextMenu(e.clientX, e.clientY, [
-                {
-                    label: '上传文件',
-                    action: () => uploadFile(fullPath, remoteFilePath),
-                    className: 'upload'
-                }
-            ]);
+
+            if (row.classList.contains('directory')) {
+                showContextMenu(e.clientX, e.clientY, [
+                    {
+                        label: '删除目录',
+                        action: () => deleteLocalDirectory(fullPath),
+                        className: 'delete'
+                    }
+                ]);
+            } else {
+                showContextMenu(e.clientX, e.clientY, [
+                    {
+                        label: '上传文件',
+                        action: () => uploadFile(fullPath, remoteFilePath),
+                        className: 'upload'
+                    },
+                    {
+                        label: '删除文件',
+                        action: () => deleteLocalFile(fullPath),
+                        className: 'delete'
+                    }
+                ]);
+            }
         });
+    }
+
+// Function to delete local file
+    async function deleteLocalFile(filePath) {
+        if (!confirm(`确定要删除文件 "${path.basename(filePath)}" 吗？此操作不可恢复！`)) {
+            return;
+        }
+
+        try {
+            const result = await window.api.file.deleteLocal(filePath);
+
+            if (result.success) {
+                // Refresh local file list
+                const localPathInput = document.getElementById('local-path');
+                if (localPathInput && localPathInput.value) {
+                    await loadLocalFiles(localPathInput.value);
+                }
+            } else {
+                alert(`删除文件失败: ${result.error || '未知错误'}`);
+            }
+        } catch (error) {
+            console.error('删除本地文件失败:', error);
+            alert(`删除文件失败: ${error.message}`);
+        }
+    }
+
+// Function to delete local directory
+    async function deleteLocalDirectory(dirPath) {
+        if (!confirm(`确定要删除目录 "${path.basename(dirPath)}" 及其所有内容吗？此操作不可恢复！`)) {
+            return;
+        }
+
+        try {
+            const result = await window.api.file.deleteLocalDirectory(dirPath);
+
+            if (result.success) {
+                // Refresh local file list
+                const localPathInput = document.getElementById('local-path');
+                if (localPathInput && localPathInput.value) {
+                    await loadLocalFiles(localPathInput.value);
+                }
+            } else {
+                alert(`删除目录失败: ${result.error || '未知错误'}`);
+            }
+        } catch (error) {
+            console.error('删除本地目录失败:', error);
+            alert(`删除目录失败: ${error.message}`);
+        }
     }
 }
 

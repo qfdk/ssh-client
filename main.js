@@ -41,7 +41,7 @@ function createWindow() {
     // 创建临时目录确保存在
     const tempDir = path.join(os.tmpdir(), 'sshl-temp');
     if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
+        fs.mkdirSync(tempDir, {recursive: true});
     }
 
     // 使用系统临时目录生成临时文件
@@ -111,7 +111,7 @@ function createWindow() {
     );
 
     // 打开开发者工具帮助调试
-    mainWindow.webContents.openDevTools();
+    // mainWindow.webContents.openDevTools();
 }
 
 app.whenReady().then(() => {
@@ -449,6 +449,52 @@ ipcMain.handle('ssh:activate-session', async (event, sessionId) => {
         }
     } catch (error) {
         console.error('激活会话错误:', error);
+        return {success: false, error: error.message};
+    }
+});
+
+ipcMain.handle('file:delete-local', async (event, filePath) => {
+    try {
+        fs.unlinkSync(filePath);
+        return {success: true};
+    } catch (error) {
+        return {success: false, error: error.message};
+    }
+});
+
+// Delete local directory
+ipcMain.handle('file:delete-local-directory', async (event, dirPath) => {
+    try {
+        // For safety, we'll only delete empty directories by default
+        fs.rmdirSync(dirPath);
+        return {success: true};
+    } catch (error) {
+        // If error is because directory is not empty
+        if (error.code === 'ENOTEMPTY') {
+            try {
+                // Use a recursive delete as fallback if user confirms
+                // This is dangerous but sometimes necessary
+                const removeDir = (dir) => {
+                    const entries = fs.readdirSync(dir, {withFileTypes: true});
+
+                    for (const entry of entries) {
+                        const fullPath = path.join(dir, entry.name);
+                        if (entry.isDirectory()) {
+                            removeDir(fullPath);
+                        } else {
+                            fs.unlinkSync(fullPath);
+                        }
+                    }
+
+                    fs.rmdirSync(dir);
+                };
+
+                removeDir(dirPath);
+                return {success: true};
+            } catch (recursiveError) {
+                return {success: false, error: `无法删除目录: ${recursiveError.message}`};
+            }
+        }
         return {success: false, error: error.message};
     }
 });
