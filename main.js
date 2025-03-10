@@ -47,15 +47,6 @@ function createWindow() {
     // 使用系统临时目录生成临时文件
     const tempHtmlPath = path.join(tempDir, `index-${Date.now()}.html`);
 
-    // 修改CSS路径为绝对路径
-    const cssFiles = [
-        'assets/css/main.css',
-        'assets/css/connection-dialog.css',
-        'assets/css/file-manager.css',
-        'assets/css/terminal.css',
-        'assets/css/buttons.css'
-    ];
-
     // 使用EJS渲染HTML内容
     ejs.renderFile(
         path.join(__dirname, 'views', 'index.ejs'),
@@ -125,9 +116,6 @@ app.whenReady().then(() => {
 app.on('window-all-closed', function () {
     if (process.platform !== 'darwin') app.quit();
 });
-
-// Rest of your IPC handlers remain the same as before
-// ...
 
 // IPC Handlers for file operations
 ipcMain.handle('file:get-home-dir', async () => {
