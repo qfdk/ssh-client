@@ -486,3 +486,30 @@ ipcMain.handle('file:delete-local-directory', async (event, dirPath) => {
         return {success: false, error: error.message};
     }
 });
+// Add this to your existing IPC handlers
+ipcMain.handle('file:create-remote-directory', async (event, {sessionId, remotePath}) => {
+    try {
+        await sshService.createDirectory(sessionId, remotePath);
+        return {success: true};
+    } catch (error) {
+        return {success: false, error: error.message};
+    }
+});
+
+ipcMain.handle('file:upload-directory', async (event, {sessionId, localPath, remotePath}) => {
+    try {
+        await sshService.uploadDirectory(sessionId, localPath, remotePath);
+        return {success: true};
+    } catch (error) {
+        return {success: false, error: error.message};
+    }
+});
+
+ipcMain.handle('file:download-directory', async (event, {sessionId, remotePath, localPath}) => {
+    try {
+        await sshService.downloadDirectory(sessionId, remotePath, localPath);
+        return {success: true};
+    } catch (error) {
+        return {success: false, error: error.message};
+    }
+});

@@ -273,7 +273,7 @@ class SshService extends EventEmitter {
                     break;
                 }
             }
-            return { success: false, error: '会话未找到' };
+            return {success: false, error: '会话未找到'};
         }
 
         if (!session.stream) {
@@ -284,10 +284,10 @@ class SshService extends EventEmitter {
                 if (result.success) {
                     return this.sendData(result.sessionId, data);
                 }
-                return { success: false, error: 'shell未启动且无法重新激活会话' };
+                return {success: false, error: 'shell未启动且无法重新激活会话'};
             } catch (err) {
                 console.error(`[sendData] 尝试重新激活会话失败:`, err);
-                return { success: false, error: '重新激活会话失败: ' + err.message };
+                return {success: false, error: '重新激活会话失败: ' + err.message};
             }
         }
 
@@ -300,10 +300,10 @@ class SshService extends EventEmitter {
 
         try {
             session.stream.write(dataStr);
-            return { success: true };
+            return {success: true};
         } catch (err) {
             console.error(`[sendData] 向会话 ${sessionId} 发送数据失败:`, err);
-            return { success: false, error: '发送数据失败: ' + err.message };
+            return {success: false, error: '发送数据失败: ' + err.message};
         }
     }
 
@@ -323,7 +323,7 @@ class SshService extends EventEmitter {
 
         // 如果存在stream，刷新命令提示符
         if (session.stream) {
-            return { success: true, sessionId };
+            return {success: true, sessionId};
         } else {
             console.warn(`[activateSession] 会话 ${sessionId} 没有可用的stream，需要重新建立连接`);
 
@@ -331,7 +331,7 @@ class SshService extends EventEmitter {
             try {
                 if (!session.details) {
                     console.error(`[activateSession] 会话 ${sessionId} 没有连接详情，无法重新连接`);
-                    return { success: false };
+                    return {success: false};
                 }
 
                 // 使用原有的连接详情重新连接
@@ -366,12 +366,12 @@ class SshService extends EventEmitter {
                     // 删除旧会话
                     this.sessions.delete(sessionId);
 
-                    return { success: true, sessionId: newSessionId };
+                    return {success: true, sessionId: newSessionId};
                 }
-                return { success: false };
+                return {success: false};
             } catch (error) {
                 console.error(`[activateSession] 重新连接失败:`, error);
-                return { success: false };
+                return {success: false};
             }
         }
     }
@@ -407,7 +407,7 @@ class SshService extends EventEmitter {
                     break;
                 }
             }
-            return { success: false, error: '会话未找到' };
+            return {success: false, error: '会话未找到'};
         }
 
         if (!session.stream) {
@@ -418,10 +418,10 @@ class SshService extends EventEmitter {
                 if (result.success) {
                     return this.refreshPrompt(result.sessionId);
                 }
-                return { success: false, error: 'shell未启动且无法重新激活会话' };
+                return {success: false, error: 'shell未启动且无法重新激活会话'};
             } catch (err) {
                 console.error(`[refreshPrompt] 尝试重新激活会话失败:`, err);
-                return { success: false, error: '重新激活会话失败: ' + err.message };
+                return {success: false, error: '重新激活会话失败: ' + err.message};
             }
         }
 
@@ -430,10 +430,10 @@ class SshService extends EventEmitter {
             session.stream.write('clear\r');
 
             console.log(`[refreshPrompt] 已发送clear命令到会话 ${sessionId}`);
-            return { success: true };
+            return {success: true};
         } catch (err) {
             console.error(`[refreshPrompt] 发送clear命令失败:`, err);
-            return { success: false, error: '发送clear命令失败: ' + err.message };
+            return {success: false, error: '发送clear命令失败: ' + err.message};
         }
     }
 
@@ -443,7 +443,7 @@ class SshService extends EventEmitter {
         const session = this.sessions.get(sessionId);
         if (!session) {
             console.error(`[resize] 会话 ${sessionId} 未找到`);
-            return { success: false, error: '会话未找到' };
+            return {success: false, error: '会话未找到'};
         }
 
         if (!session.stream) {
@@ -454,19 +454,19 @@ class SshService extends EventEmitter {
                 if (result.success) {
                     return this.resize(result.sessionId, cols, rows);
                 }
-                return { success: false, error: 'shell未启动且无法重新激活会话' };
+                return {success: false, error: 'shell未启动且无法重新激活会话'};
             } catch (err) {
                 console.error(`[resize] 尝试重新激活会话失败:`, err);
-                return { success: false, error: '重新激活会话失败: ' + err.message };
+                return {success: false, error: '重新激活会话失败: ' + err.message};
             }
         }
 
         try {
             session.stream.setWindow(rows, cols, 0, 0);
-            return { success: true };
+            return {success: true};
         } catch (err) {
             console.error(`[resize] 调整终端大小失败:`, err);
-            return { success: false, error: '调整终端大小失败: ' + err.message };
+            return {success: false, error: '调整终端大小失败: ' + err.message};
         }
     }
 
@@ -555,7 +555,62 @@ class SshService extends EventEmitter {
         });
     }
 
-    async downloadFile(sessionId, remotePath, localPath) {
+    async downloadFile(remotePath, localFilePath) {
+        if (!currentSessionId) {
+            alert('请先连接到服务器');
+            return;
+        }
+
+        try {
+            // Get current local directory path
+            const localPathInput = document.getElementById('local-path');
+            if (!localPathInput || !localPathInput.value) {
+                alert('请先选择本地目录');
+                return;
+            }
+
+            // Create local file path using the filename from remote path
+            const fileName = path.basename(remotePath);
+            localFilePath = path.join(localPathInput.value, fileName);
+
+            // Show transfer status bar
+            showTransferStatus(true);
+
+            // Set progress bar
+            const progressBar = document.getElementById('transfer-progress-bar');
+            const transferInfo = document.getElementById('transfer-info');
+
+            progressBar.style.width = '0%';
+            transferInfo.textContent = `正在下载: ${fileName}`;
+
+            const result = await window.api.file.download(currentSessionId, remotePath, localFilePath);
+
+            // Update progress regardless of result
+            progressBar.style.width = '100%';
+
+            if (result.success) {
+                transferInfo.textContent = '下载完成';
+
+                // Refresh local file list
+                await loadLocalFiles(localPathInput.value);
+            } else {
+                transferInfo.textContent = `下载失败: ${result.error || '未知错误'}`;
+                alert(`下载失败: ${result.error || '未知错误'}`);
+            }
+
+            // Always hide progress bar after a delay
+            setTimeout(() => {
+                progressBar.style.width = '0%';
+                showTransferStatus(false);
+            }, 3000);
+        } catch (error) {
+            console.error('下载文件失败:', error);
+            alert(`下载文件失败: ${error.message}`);
+            showTransferStatus(false);
+        }
+    }
+
+    async createDirectory(sessionId, remotePath) {
         const session = this.sessions.get(sessionId);
         if (!session) {
             throw new Error('会话未找到');
@@ -568,7 +623,7 @@ class SshService extends EventEmitter {
                     return;
                 }
 
-                sftp.fastGet(remotePath, localPath, (err) => {
+                sftp.mkdir(remotePath, (err) => {
                     if (err) {
                         reject(err);
                         return;
@@ -578,6 +633,142 @@ class SshService extends EventEmitter {
             });
         });
     }
+
+    async uploadDirectory(sessionId, localPath, remotePath) {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            throw new Error('会话未找到');
+        }
+
+        const fs = require('fs');
+        const path = require('path');
+
+        // Get SFTP instance once for the entire operation
+        const sftp = await new Promise((resolve, reject) => {
+            session.conn.sftp((err, sftp) => {
+                if (err) reject(err);
+                else resolve(sftp);
+            });
+        });
+
+        // Create remote directory
+        try {
+            await new Promise((resolve, reject) => {
+                sftp.mkdir(remotePath, err => {
+                    // Ignore if directory already exists (code 4)
+                    if (err && err.code !== 4) {
+                        console.warn(`Warning creating dir ${remotePath}:`, err);
+                    }
+                    resolve(); // Continue anyway
+                });
+            });
+        } catch (error) {
+            console.warn(`Warning creating base dir:`, error);
+            // Continue regardless of error - directory may exist
+        }
+
+        // Process files and directories
+        const processItem = async (localItemPath, remoteItemPath) => {
+            const stats = fs.statSync(localItemPath);
+
+            if (stats.isDirectory()) {
+                // Create directory on remote
+                try {
+                    await new Promise((resolve, reject) => {
+                        sftp.mkdir(remoteItemPath, err => {
+                            // Ignore if directory already exists
+                            if (err && err.code !== 4) {
+                                console.warn(`Warning creating dir ${remoteItemPath}:`, err);
+                            }
+                            resolve(); // Continue anyway
+                        });
+                    });
+                } catch (error) {
+                    console.warn(`Warning creating dir:`, error);
+                    // Continue regardless of error
+                }
+
+                // Process all items in directory
+                const items = fs.readdirSync(localItemPath);
+                for (const item of items) {
+                    await processItem(
+                        path.join(localItemPath, item),
+                        `${remoteItemPath}/${item}`
+                    );
+                }
+            } else {
+                // Upload file
+                await new Promise((resolve, reject) => {
+                    sftp.fastPut(localItemPath, remoteItemPath, err => {
+                        if (err) reject(err);
+                        else resolve();
+                    });
+                });
+            }
+        };
+
+        // Start recursive upload operation
+        await processItem(localPath, remotePath);
+        return true;
+    }
+
+    async downloadDirectory(remoteDirPath) {
+        if (!currentSessionId) {
+            alert('请先连接到服务器');
+            return;
+        }
+
+        try {
+            // Get current local directory path from the UI
+            const localPathInput = document.getElementById('local-path');
+            if (!localPathInput || !localPathInput.value) {
+                alert('请先选择本地目录');
+                return;
+            }
+
+            // Get directory name from remote path
+            const dirName = path.basename(remoteDirPath);
+            // Join with the current local directory
+            const localDirPath = path.join(localPathInput.value, dirName);
+
+            // Show transfer status bar
+            showTransferStatus(true);
+
+            // Set progress bar
+            const progressBar = document.getElementById('transfer-progress-bar');
+            const transferInfo = document.getElementById('transfer-info');
+
+            progressBar.style.width = '0%';
+            transferInfo.textContent = `正在下载文件夹: ${dirName}`;
+
+            const downloadResult = await window.api.file.downloadDirectory(currentSessionId, remoteDirPath, localDirPath);
+
+            // Update progress regardless of result
+            progressBar.style.width = '100%';
+
+            if (downloadResult.success) {
+                transferInfo.textContent = '文件夹下载完成';
+
+                // Refresh local file list
+                await loadLocalFiles(localPathInput.value);
+            } else {
+                transferInfo.textContent = `下载失败: ${downloadResult.error || '未知错误'}`;
+                alert(`下载文件夹失败: ${downloadResult.error || '未知错误'}`);
+            }
+
+            // Always hide progress bar after a delay
+            setTimeout(() => {
+                progressBar.style.width = '0%';
+                showTransferStatus(false);
+            }, 3000);
+
+        } catch (error) {
+            console.error('下载文件夹失败:', error);
+            alert(`下载文件夹失败: ${error.message}`);
+            showTransferStatus(false);
+        }
+    }
 }
+
 
 module.exports = new SshService();

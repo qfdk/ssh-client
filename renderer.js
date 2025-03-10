@@ -1943,6 +1943,180 @@ async function deleteRemoteDirectory(dirPath) {
     }
 }
 
+// Add implementation for the new functions
+async function createRemoteDirectory(parentPath) {
+    if (!currentSessionId) {
+        alert('请先连接到服务器');
+        return;
+    }
+
+    const dirName = prompt('请输入文件夹名称');
+    if (!dirName) return;
+
+    // Validate directory name
+    if (dirName.includes('/') || dirName.includes('\\')) {
+        alert('文件夹名称不能包含斜杠');
+        return;
+    }
+
+    // Create full path
+    const fullPath = parentPath === '/' ? `/${dirName}` : `${parentPath}/${dirName}`;
+
+    try {
+        showFileManagerLoading(true);
+
+        const result = await window.api.file.createRemoteDirectory(currentSessionId, fullPath);
+
+        if (result.success) {
+            // Refresh remote file list
+            const remotePathInput = document.getElementById('remote-path');
+            if (remotePathInput) {
+                await loadRemoteFiles(remotePathInput.value);
+            }
+        } else {
+            alert(`创建文件夹失败: ${result.error || '未知错误'}`);
+        }
+    } catch (error) {
+        console.error('创建远程文件夹失败:', error);
+        alert(`创建文件夹失败: ${error.message}`);
+    } finally {
+        showFileManagerLoading(false);
+    }
+}
+
+async function uploadDirectory(localDirPath, remoteDirPath) {
+    if (!currentSessionId) {
+        alert('请先连接到服务器');
+        return;
+    }
+
+    try {
+        // Show transfer status bar
+        showTransferStatus(true);
+
+        // Set progress bar
+        const progressBar = document.getElementById('transfer-progress-bar');
+        const transferInfo = document.getElementById('transfer-info');
+
+        progressBar.style.width = '0%';
+        transferInfo.textContent = `正在上传文件夹: ${path.basename(localDirPath)}`;
+
+        const result = await window.api.file.uploadDirectory(currentSessionId, localDirPath, remoteDirPath);
+
+        // Update progress regardless of result
+        progressBar.style.width = '100%';
+
+        if (result.success) {
+            transferInfo.textContent = '文件夹上传完成';
+
+            // Refresh remote file list
+            const remotePathInput = document.getElementById('remote-path');
+            if (remotePathInput) {
+                await loadRemoteFiles(remotePathInput.value);
+            }
+        } else {
+            transferInfo.textContent = `上传失败: ${result.error || '未知错误'}`;
+            alert(`上传文件夹失败: ${result.error || '未知错误'}`);
+        }
+
+        // Always hide progress bar after a delay
+        setTimeout(() => {
+            progressBar.style.width = '0%';
+            showTransferStatus(false);
+        }, 3000);
+
+    } catch (error) {
+        console.error('上传文件夹失败:', error);
+        alert(`上传文件夹失败: ${error.message}`);
+
+        // Hide progress bar immediately on error
+        showTransferStatus(false);
+    }
+}
+
+async function selectAndUploadDirectory(remotePath) {
+    if (!currentSessionId) {
+        alert('请先连接到服务器');
+        return;
+    }
+
+    try {
+        const result = await window.api.dialog.selectDirectory();
+        if (result.canceled) {
+            return;
+        }
+
+        const localDirPath = result.directoryPath;
+        const dirName = path.basename(localDirPath);
+        const remoteDirPath = remotePath === '/' ? `/${dirName}` : `${remotePath}/${dirName}`;
+
+        await uploadDirectory(localDirPath, remoteDirPath);
+    } catch (error) {
+        console.error('选择目录失败:', error);
+        alert(`选择目录失败: ${error.message}`);
+    }
+}
+
+async function downloadDirectory(remoteDirPath) {
+    if (!currentSessionId) {
+        alert('请先连接到服务器');
+        return;
+    }
+
+    try {
+        // Request user to select save location
+        const result = await window.api.dialog.selectDirectory();
+        if (result.canceled) {
+            return;
+        }
+
+        // Get directory name
+        const dirName = path.basename(remoteDirPath);
+        // Join with the selected path
+        const localDirPath = path.join(result.directoryPath, dirName);
+
+        // Show transfer status bar
+        showTransferStatus(true);
+
+        // Set progress bar
+        const progressBar = document.getElementById('transfer-progress-bar');
+        const transferInfo = document.getElementById('transfer-info');
+
+        progressBar.style.width = '0%';
+        transferInfo.textContent = `正在下载文件夹: ${dirName}`;
+
+        const downloadResult = await window.api.file.downloadDirectory(currentSessionId, remoteDirPath, localDirPath);
+
+        if (downloadResult.success) {
+            // Download success
+            progressBar.style.width = '100%';
+            transferInfo.textContent = '文件夹下载完成';
+
+            // Refresh local file list
+            const localPathInput = document.getElementById('local-path');
+            if (localPathInput && localPathInput.value) {
+                await loadLocalFiles(localPathInput.value);
+            }
+
+            setTimeout(() => {
+                progressBar.style.width = '0%';
+                showTransferStatus(false);
+            }, 3000);
+        } else {
+            alert(`下载文件夹失败: ${downloadResult.error}`);
+            transferInfo.textContent = '下载失败';
+
+            setTimeout(() => {
+                showTransferStatus(false);
+            }, 3000);
+        }
+    } catch (error) {
+        console.error('下载文件夹失败:', error);
+        alert(`下载文件夹失败: ${error.message}`);
+        showTransferStatus(false);
+    }
+}
+
 // 添加文件传输按钮监听
 function setupFileTransferListeners() {
     // 右键菜单处理
@@ -1950,23 +2124,39 @@ function setupFileTransferListeners() {
 
     if (remoteFilesTable) {
         remoteFilesTable.addEventListener('contextmenu', function (e) {
-            // 检查是否点击在文件行上
+            // Check if clicked on a file row
             const row = e.target.closest('tr');
-            if (!row) return;
+            if (!row) {
+                // If clicked outside a row, show directory operations
+                const remotePath = document.getElementById('remote-path').value;
+                e.preventDefault();
+                showContextMenu(e.clientX, e.clientY, [
+                    {
+                        label: '新建文件夹',
+                        action: () => createRemoteDirectory(remotePath),
+                        className: 'create-directory'
+                    }
+                ]);
+                return;
+            }
 
-            // 获取文件名和路径
+            // Get file name and path
             const fileName = row.querySelector('td:first-child').textContent.trim().replace(/^.+\s/, '');
             const remotePath = document.getElementById('remote-path').value;
             const fullPath = remotePath === '/' ? `/${fileName}` : `${remotePath}/${fileName}`;
 
-            // 跳过上级目录
+            // Skip parent directory
             if (fileName === '..') return;
 
-            // 根据是否为目录创建不同的菜单
             e.preventDefault();
 
             if (row.classList.contains('directory')) {
                 showContextMenu(e.clientX, e.clientY, [
+                    {
+                        label: '下载文件夹',
+                        action: () => downloadDirectory(fullPath),
+                        className: 'download'
+                    },
                     {
                         label: '删除目录',
                         action: () => deleteRemoteDirectory(fullPath),
@@ -1974,6 +2164,7 @@ function setupFileTransferListeners() {
                     }
                 ]);
             } else {
+                // Keep existing file context menu
                 showContextMenu(e.clientX, e.clientY, [
                     {
                         label: '下载文件',
@@ -1989,32 +2180,47 @@ function setupFileTransferListeners() {
             }
         });
     }
-
-// Updated context menu handler for local files
+    // Updated context menu handler for local files
     const localFilesTable = document.getElementById('local-files');
 
     if (localFilesTable) {
         localFilesTable.addEventListener('contextmenu', function (e) {
             // Check if clicked on a file row
             const row = e.target.closest('tr');
-            if (!row) return;
+            if (!row) {
+                // If clicked outside a row, show directory operations
+                const localPath = document.getElementById('local-path').value;
+                const remotePath = document.getElementById('remote-path').value;
+                e.preventDefault();
+                showContextMenu(e.clientX, e.clientY, [
+                    {
+                        label: '选择文件夹上传',
+                        action: () => selectAndUploadDirectory(remotePath),
+                        className: 'upload'
+                    }
+                ]);
+                return;
+            }
 
-            // Skip parent directory
+            // File name and path
             const fileName = row.querySelector('td:first-child').textContent.trim().replace(/^.+\s/, '');
             if (fileName === '..') return;
 
-            // File name and path
             const localPath = document.getElementById('local-path').value;
             const fullPath = path.join(localPath, fileName);
 
             const remotePath = document.getElementById('remote-path').value;
             const remoteFilePath = remotePath === '/' ? `/${fileName}` : `${remotePath}/${fileName}`;
 
-            // Create context menu based on whether it's a directory or file
             e.preventDefault();
 
             if (row.classList.contains('directory')) {
                 showContextMenu(e.clientX, e.clientY, [
+                    {
+                        label: '上传文件夹',
+                        action: () => uploadDirectory(fullPath, remoteFilePath),
+                        className: 'upload'
+                    },
                     {
                         label: '删除目录',
                         action: () => deleteLocalDirectory(fullPath),
@@ -2022,6 +2228,7 @@ function setupFileTransferListeners() {
                     }
                 ]);
             } else {
+                // Keep existing file context menu
                 showContextMenu(e.clientX, e.clientY, [
                     {
                         label: '上传文件',
@@ -2312,6 +2519,15 @@ const menuCSS = `
     background-repeat: no-repeat;
     background-position: center;
 }
+#context-menu div.create-directory::before {
+    content: "";
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23374151' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z'/%3E%3Cline x1='12' y1='11' x2='12' y2='17'/%3E%3Cline x1='9' y1='14' x2='15' y2='14'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+}
 `;
 
 // 额外CSS修复
@@ -2457,6 +2673,21 @@ let isTabSwitching = false;
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
+    // Remote path input enter key handling
+    const remotePathInput = document.getElementById('remote-path');
+    if (remotePathInput) {
+        remotePathInput.addEventListener('keydown', function (e) {
+            // Check if Enter key was pressed
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const path = this.value;
+                if (path) {
+                    loadRemoteFiles(path);
+                }
+            }
+        });
+    }
+
     // 添加自定义样式
     const customStyle = document.createElement('style');
     customStyle.textContent = `

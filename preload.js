@@ -36,7 +36,21 @@ contextBridge.exposeInMainWorld('api', {
             localPath
         }),
         deleteLocal: (filePath) => ipcRenderer.invoke('file:delete-local', filePath),
-        deleteLocalDirectory: (dirPath) => ipcRenderer.invoke('file:delete-local-directory', dirPath)
+        deleteLocalDirectory: (dirPath) => ipcRenderer.invoke('file:delete-local-directory', dirPath),
+        createRemoteDirectory: (sessionId, remotePath) => ipcRenderer.invoke('file:create-remote-directory', {
+            sessionId,
+            remotePath
+        }),
+        uploadDirectory: (sessionId, localPath, remotePath) => ipcRenderer.invoke('file:upload-directory', {
+            sessionId,
+            localPath,
+            remotePath
+        }),
+        downloadDirectory: (sessionId, remotePath, localPath) => ipcRenderer.invoke('file:download-directory', {
+            sessionId,
+            remotePath,
+            localPath
+        })
     },
     config: {
         getConnections: () => ipcRenderer.invoke('config:get-connections'),
