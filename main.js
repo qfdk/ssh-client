@@ -513,3 +513,13 @@ ipcMain.handle('file:download-directory', async (event, {sessionId, remotePath, 
         return {success: false, error: error.message};
     }
 });
+
+sshService.on('download-progress', (progressData) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    try {
+        mainWindow.webContents.send('file:download-progress', progressData);
+    } catch (error) {
+        console.error('处理下载进度事件时出错:', error);
+    }
+});

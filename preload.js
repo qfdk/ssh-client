@@ -30,6 +30,11 @@ contextBridge.exposeInMainWorld('api', {
             localPath,
             remotePath
         }),
+        onDownloadProgress: (callback) => {
+            const listener = (event, data) => callback(event, data);
+            ipcRenderer.on('file:download-progress', listener);
+            return () => ipcRenderer.removeListener('file:download-progress', listener);
+        },
         download: (sessionId, remotePath, localPath) => ipcRenderer.invoke('file:download', {
             sessionId,
             remotePath,

@@ -2671,22 +2671,31 @@ document.addEventListener('click', async function (event) {
 // Add this flag to track tab switching operations
 let isTabSwitching = false;
 
-// 初始化
-document.addEventListener('DOMContentLoaded', () => {
-    // Remote path input enter key handling
-    const remotePathInput = document.getElementById('remote-path');
-    if (remotePathInput) {
-        remotePathInput.addEventListener('keydown', function (e) {
-            // Check if Enter key was pressed
+function setupEnterKeyHandler(elementId, loadFunction) {
+    const inputElement = document.getElementById(elementId);
+
+    if (inputElement) {
+        inputElement.addEventListener('keydown', async (e) => {
             if (e.key === 'Enter') {
                 e.preventDefault();
-                const path = this.value;
+                const path = inputElement.value; // 修正: 使用inputElement.value代替this.value
+
                 if (path) {
-                    loadRemoteFiles(path);
+                    await loadFunction(path);
                 }
             }
         });
     }
+}
+
+
+// 初始化
+document.addEventListener('DOMContentLoaded', () => {
+    // 设置远程路径输入框
+    setupEnterKeyHandler('remote-path', loadRemoteFiles);
+
+    // 设置本地路径输入框
+    setupEnterKeyHandler('local-path', loadLocalFiles);
 
     // 添加自定义样式
     const customStyle = document.createElement('style');
@@ -2913,6 +2922,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 初始化时隐藏传输状态栏
     showTransferStatus(false);
+
+    if (window.api && window.api.file) {
+        window.api.file.onDownloadProgress((event, progressData) => {
+            // Update the progress bar
+            const progressBar = document.getElementById('transfer-progress-bar');
+            const transferInfo = document.getElementById('transfer-info');
+
+            if (progressBar && transferInfo) {
+                // Show transfer status
+                showTransferStatus(true);
+
+                // Update progress bar width
+                progressBar.style.width = `${progressData.progress}%`;
+
+                // Update info text
+                const fileName = path.basename(progressData.remotePath);
+                const downloadedSize = formatFileSize(progressData.downloadedBytes || progressData.completedSize);
+                const totalSize = formatFileSize(progressData.fileSize || progressData.totalSize);
+
+                transferInfo.textContent = `正在下载: ${fileName} (${progressData.progress}% - ${downloadedSize}/${totalSize})`;
+
+                // Hide status after completion (with delay)
+                if (progressData.progress >= 100) {
+                    transferInfo.textContent = '下载完成';
+                    setTimeout(() => {
+                        progressBar.style.width = '0%';
+                        showTransferStatus(false);
+                    }, 3000);
+                }
+            }
+        });
+    }
 
     console.log('应用初始化完成');
 });
