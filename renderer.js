@@ -2164,11 +2164,11 @@ function setupFileTransferListeners() {
                     }
                 ]);
             } else {
-                // Keep existing file context menu
+                // Modified file context menu for direct download
                 showContextMenu(e.clientX, e.clientY, [
                     {
                         label: '下载文件',
-                        action: () => downloadFile(fullPath),
+                        action: () => downloadFile(fullPath), // No second parameter, will use current local directory
                         className: 'download'
                     },
                     {

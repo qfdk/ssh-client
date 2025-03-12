@@ -6,7 +6,7 @@
   "author": "qfdk",
   "scripts": {
     "start": "electron .",
-    "build:mac": "electron-builder --mac"
+    "build:mac": "NODE_ENV=production electron-builder --mac"
   },
   "dependencies": {
     "ejs": "^3.1.9",

@@ -375,7 +375,7 @@ class SshService extends EventEmitter {
             }
         }
     }
-    
+
     async refreshPrompt(sessionId) {
         console.log(`[refreshPrompt] 开始刷新会话 ${sessionId} 的命令提示符`);
         const session = this.sessions.get(sessionId);
@@ -655,7 +655,39 @@ class SshService extends EventEmitter {
         return true;
     }
 
-    async downloadFile(remotePath, localFilePath) {
+    // Download file
+    async downloadFile(sessionId, remotePath, localPath) {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            throw new Error('会话未找到');
+        }
+
+        return new Promise((resolve, reject) => {
+            session.conn.sftp((err, sftp) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+
+                // Create parent directory if it doesn't exist
+                const parentDir = require('path').dirname(localPath);
+                if (!require('fs').existsSync(parentDir)) {
+                    require('fs').mkdirSync(parentDir, { recursive: true });
+                }
+
+                // Use fastGet to download the file directly to the specified path
+                sftp.fastGet(remotePath, localPath, (err) => {
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+                    resolve();
+                });
+            });
+        });
+    }
+
+    async downloadDirectory(remoteDirPath) {
         if (!currentSessionId) {
             alert('请先连接到服务器');
             return;
@@ -669,11 +701,10 @@ class SshService extends EventEmitter {
                 return;
             }
 
-            // If no specific local path provided, use the current local path + filename
-            if (!localFilePath) {
-                const fileName = path.basename(remotePath);
-                localFilePath = path.join(localPathInput.value, fileName);
-            }
+            // Get directory name
+            const dirName = path.basename(remoteDirPath);
+            // Join with the current local path
+            const localDirPath = path.join(localPathInput.value, dirName);
 
             // Show transfer status bar
             showTransferStatus(true);
@@ -683,14 +714,14 @@ class SshService extends EventEmitter {
             const transferInfo = document.getElementById('transfer-info');
 
             progressBar.style.width = '0%';
-            transferInfo.textContent = `正在下载: ${path.basename(remotePath)}`;
+            transferInfo.textContent = `正在下载文件夹: ${dirName}`;
 
-            const result = await window.api.file.download(currentSessionId, remotePath, localFilePath);
+            const downloadResult = await window.api.file.downloadDirectory(currentSessionId, remoteDirPath, localDirPath);
 
-            if (result.success) {
+            if (downloadResult.success) {
                 // Download success
                 progressBar.style.width = '100%';
-                transferInfo.textContent = '下载完成';
+                transferInfo.textContent = '文件夹下载完成';
 
                 // Refresh local file list
                 await loadLocalFiles(localPathInput.value);
@@ -700,7 +731,7 @@ class SshService extends EventEmitter {
                     showTransferStatus(false);
                 }, 3000);
             } else {
-                alert(`下载失败: ${result.error}`);
+                alert(`下载文件夹失败: ${downloadResult.error}`);
                 transferInfo.textContent = '下载失败';
 
                 setTimeout(() => {
@@ -708,143 +739,10 @@ class SshService extends EventEmitter {
                 }, 3000);
             }
         } catch (error) {
-            console.error('下载文件失败:', error);
-            alert(`下载文件失败: ${error.message}`);
+            console.error('下载文件夹失败:', error);
+            alert(`下载文件夹失败: ${error.message}`);
             showTransferStatus(false);
         }
-    }
-
-    async downloadDirectory(sessionId, remotePath, localPath) {
-        const session = this.sessions.get(sessionId);
-        if (!session) {
-            throw new Error('会话未找到');
-        }
-
-        const fs = require('fs');
-        const path = require('path');
-
-        // 确保本地目录存在
-        if (!fs.existsSync(localPath)) {
-            fs.mkdirSync(localPath, {recursive: true});
-        }
-
-        // Get SFTP connection
-        const sftp = await new Promise((resolve, reject) => {
-            session.conn.sftp((err, sftp) => {
-                if (err) reject(err);
-                else resolve(sftp);
-            });
-        });
-
-        // First, calculate the total size by scanning all files
-        let totalSize = 0;
-        let completedSize = 0;
-
-        // Helper function to calculate directory size
-        const calculateSize = async (dirPath) => {
-            const list = await new Promise((resolve, reject) => {
-                sftp.readdir(dirPath, (err, list) => {
-                    if (err) reject(err);
-                    else resolve(list);
-                });
-            });
-
-            for (const item of list) {
-                const itemPath = `${dirPath}/${item.filename}`;
-
-                if (item.attrs.isDirectory()) {
-                    await calculateSize(itemPath);
-                } else {
-                    totalSize += item.attrs.size;
-                }
-            }
-        };
-
-        // Calculate initial total size
-        await calculateSize(remotePath);
-
-        // Emit initial progress
-        this.emit('download-progress', {
-            sessionId,
-            remotePath,
-            localPath,
-            progress: 0,
-            totalSize,
-            completedSize: 0
-        });
-
-        // Helper function to download a directory recursively with progress
-        const downloadDir = async (remoteDirPath, localDirPath) => {
-            // Make sure local directory exists
-            if (!fs.existsSync(localDirPath)) {
-                fs.mkdirSync(localDirPath, {recursive: true});
-            }
-
-            const list = await new Promise((resolve, reject) => {
-                sftp.readdir(remoteDirPath, (err, list) => {
-                    if (err) reject(err);
-                    else resolve(list);
-                });
-            });
-
-            for (const item of list) {
-                const remoteItemPath = `${remoteDirPath}/${item.filename}`;
-                const localItemPath = path.join(localDirPath, item.filename);
-
-                if (item.attrs.isDirectory()) {
-                    await downloadDir(remoteItemPath, localItemPath);
-                } else {
-                    await new Promise((resolve, reject) => {
-                        // Download file with progress tracking
-                        const readStream = sftp.createReadStream(remoteItemPath);
-                        const writeStream = fs.createWriteStream(localItemPath);
-
-                        let fileCompletedSize = 0;
-
-                        readStream.on('data', (chunk) => {
-                            fileCompletedSize += chunk.length;
-                            completedSize += chunk.length;
-
-                            // Calculate progress percentage of entire directory download
-                            const progress = Math.floor((completedSize / totalSize) * 100);
-
-                            this.emit('download-progress', {
-                                sessionId,
-                                remotePath,
-                                localPath,
-                                progress,
-                                totalSize,
-                                completedSize
-                            });
-                        });
-
-                        writeStream.on('finish', () => {
-                            resolve();
-                        });
-
-                        readStream.on('error', reject);
-                        writeStream.on('error', reject);
-
-                        readStream.pipe(writeStream);
-                    });
-                }
-            }
-        };
-
-        // Start the download with progress tracking
-        await downloadDir(remotePath, localPath);
-
-        // Ensure 100% progress is emitted at the end
-        this.emit('download-progress', {
-            sessionId,
-            remotePath,
-            localPath,
-            progress: 100,
-            totalSize,
-            completedSize: totalSize
-        });
-
-        return true;
     }
 }
 
