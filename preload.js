@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('api', {
         resize: (sessionId, cols, rows) => ipcRenderer.invoke('ssh:resize', {sessionId, cols, rows}),
         refreshPrompt: (sessionId) => ipcRenderer.invoke('ssh:refresh-prompt', sessionId),
         activateSession: (sessionId) => ipcRenderer.invoke('ssh:activate-session', sessionId),
+        getSessionBuffer: (sessionId) => ipcRenderer.invoke('ssh:get-session-buffer', sessionId),
         onData: (callback) => {
             const listener = (event, data) => callback(event, data);
             ipcRenderer.on('ssh:data', listener);
@@ -19,7 +20,8 @@ contextBridge.exposeInMainWorld('api', {
             const listener = (event, data) => callback(event, data);
             ipcRenderer.on('ssh:closed', listener);
             return () => ipcRenderer.removeListener('ssh:closed', listener);
-        }
+        },
+        connectAlternative: (connectionDetails) => ipcRenderer.invoke('ssh:connect-alternative', connectionDetails)
     },
     file: {
         list: (sessionId, path) => ipcRenderer.invoke('file:list', {sessionId, path}),

@@ -69,13 +69,34 @@ class SshService extends EventEmitter {
                 // 生成连接唯一标识
                 const connectionKey = `${connectionDetails.username}@${connectionDetails.host}:${connectionDetails.port || 22}`;
 
+                // 创建会话ID提前，这样可以在数据事件触发前关联数据
+                const sessionId = Date.now().toString();
+
+                // 添加一个临时缓冲区来存储所有初始消息
+                const initialBuffer = [];
+
                 // 检查是否存在可共享的连接
                 const existingConnection = this.sharedConnections.get(connectionKey);
                 const conn = existingConnection ? existingConnection.conn : new Client();
 
-                conn.on('ready', () => {
-                    const sessionId = Date.now().toString();
+                // 先创建会话对象，确保数据事件触发时有会话可以存储数据
+                this.sessions.set(sessionId, {
+                    conn,
+                    stream: null, // 稍后设置
+                    details: connectionDetails,
+                    connectionKey,
+                    connectionId: connectionDetails.id,
+                    active: true,
+                    buffer: ''
+                });
 
+                // 保存连接ID到会话ID的映射
+                if (connectionDetails.id) {
+                    this.connectionToSession.set(connectionDetails.id, sessionId);
+                }
+
+                conn.on('ready', () => {
+                    console.log('SSH连接已就绪，正在创建shell会话');
                     // 创建shell会话
                     conn.shell({term: 'xterm-color', rows: 24, cols: 80}, (err, stream) => {
                         if (err) {
@@ -86,27 +107,37 @@ class SshService extends EventEmitter {
 
                         // 设置数据处理
                         stream.on('data', (data) => {
-                            // 将Buffer转为字符串，避免数据类型问题
+                            // 将Buffer转为字符串
                             const dataStr = data.toString('utf8');
 
-                            // 检查会话是否活跃，只有活跃会话才发送数据
+                            // 获取会话并更新缓冲区
                             const session = this.sessions.get(sessionId);
-                            if (session && session.active) {
-                                this.emit('data', sessionId, dataStr);
-                            } else {
-                                console.log(`[SshService] 会话 ${sessionId} 不活跃，不发送数据`);
+                            if (session) {
+                                // 无论是否活跃，都追加到缓冲区
+                                session.buffer = (session.buffer || '') + dataStr;
+                                this.sessions.set(sessionId, session);
+
+                                // 只有活跃会话才发送数据给客户端
+                                if (session.active) {
+                                    this.emit('data', sessionId, dataStr);
+                                } else {
+                                    console.log(`[SshService] 会话 ${sessionId} 不活跃，不发送数据`);
+                                }
                             }
                         });
 
                         stream.stderr.on('data', (data) => {
                             const dataStr = data.toString('utf8');
 
-                            // 同样检查会话活跃状态
+                            // 同样处理stderr数据
                             const session = this.sessions.get(sessionId);
-                            if (session && session.active) {
-                                this.emit('data', sessionId, dataStr);
-                            } else {
-                                console.log(`[SshService] 会话 ${sessionId} 不活跃，不发送stderr数据`);
+                            if (session) {
+                                session.buffer = (session.buffer || '') + dataStr;
+                                this.sessions.set(sessionId, session);
+
+                                if (session.active) {
+                                    this.emit('data', sessionId, dataStr);
+                                }
                             }
                         });
 
@@ -143,22 +174,23 @@ class SshService extends EventEmitter {
                             }
                         });
 
-                        // 存储会话和共享连接信息
-                        this.sessions.set(sessionId, {
-                            conn,
-                            stream,
-                            details: connectionDetails,
-                            connectionKey,
-                            connectionId: connectionDetails.id, // 保存连接ID
-                            active: true // 添加活跃状态标志
-                        });
-
-                        // 保存连接ID到会话ID的映射
-                        if (connectionDetails.id) {
-                            this.connectionToSession.set(connectionDetails.id, sessionId);
+                        // 将已缓存的数据写入缓冲区
+                        if (initialBuffer.length > 0) {
+                            const session = this.sessions.get(sessionId);
+                            if (session) {
+                                session.buffer = initialBuffer.join('') + (session.buffer || '');
+                                this.sessions.set(sessionId, session);
+                            }
                         }
 
-                        // 更新或创建共享连接记录
+                        // 更新会话，设置stream
+                        const session = this.sessions.get(sessionId);
+                        if (session) {
+                            session.stream = stream;
+                            this.sessions.set(sessionId, session);
+                        }
+
+                        // 更新共享连接记录
                         if (!existingConnection) {
                             this.sharedConnections.set(connectionKey, {
                                 conn,
@@ -176,6 +208,10 @@ class SshService extends EventEmitter {
 
                 conn.on('error', (err) => {
                     console.error('SSH连接错误:', err.message);
+                    // 更详细的错误输出，便于调试
+                    if (err.syscall) {
+                        console.error(`SSH错误详情: 系统调用=${err.syscall}, 地址=${err.address}, 端口=${err.port}, 代码=${err.code}`);
+                    }
                     reject(err);
                 });
 
@@ -190,6 +226,34 @@ class SshService extends EventEmitter {
                     readyTimeout: 30000,
                     keepaliveInterval: 10000
                 };
+
+                // 检测本地网络连接并应用特殊设置
+                if (/^(192\.168\.|10\.|172\.16\.)/.test(connectionDetails.host)) {
+                    console.log('本地网络连接，添加特殊连接选项');
+                    connectOptions.forceIPv4 = true;
+                    connectOptions.localHostname = '0.0.0.0';
+                    connectOptions.hostVerifier = () => true;
+                    connectOptions.readyTimeout = 60000; // 增加超时时间到60秒
+                    connectOptions.debug = true; // 启用调试日志
+
+                    // 设置本地IP绑定
+                    try {
+                        const interfaces = require('os').networkInterfaces();
+                        const localIPs = Object.values(interfaces)
+                            .flat()
+                            .filter(iface => !iface.internal && iface.family === 'IPv4')
+                            .map(iface => iface.address);
+
+                        if (localIPs.length > 0) {
+                            console.log(`可用的本地IP: ${localIPs.join(', ')}`);
+                            // 默认使用第一个非内部IPv4地址
+                            connectOptions.localAddress = localIPs[0];
+                            console.log(`使用本地地址: ${connectOptions.localAddress}`);
+                        }
+                    } catch (err) {
+                        console.warn('获取本地IP地址失败:', err);
+                    }
+                }
 
                 // 根据认证类型选择认证方式
                 if (connectionDetails.authType === 'privateKey' && connectionDetails.privateKey) {
@@ -424,14 +488,15 @@ class SshService extends EventEmitter {
         }
 
         try {
-            // 发送一个正确格式的clear命令，确保包含回车符
-            session.stream.write('clear\r');
+            // 修改这里，不发送clear命令，而是使用一个不会清屏的命令，比如echo命令
+            // session.stream.write('clear\r');
+            session.stream.write('echo -n ""\r');  // 发送一个无输出的echo命令来刷新提示符
 
-            console.log(`[refreshPrompt] 已发送clear命令到会话 ${sessionId}`);
+            console.log(`[refreshPrompt] 已发送刷新命令到会话 ${sessionId}`);
             return {success: true};
         } catch (err) {
-            console.error(`[refreshPrompt] 发送clear命令失败:`, err);
-            return {success: false, error: '发送clear命令失败: ' + err.message};
+            console.error(`[refreshPrompt] 发送命令失败:`, err);
+            return {success: false, error: '发送命令失败: ' + err.message};
         }
     }
 
@@ -672,7 +737,7 @@ class SshService extends EventEmitter {
                 // Create parent directory if it doesn't exist
                 const parentDir = require('path').dirname(localPath);
                 if (!require('fs').existsSync(parentDir)) {
-                    require('fs').mkdirSync(parentDir, { recursive: true });
+                    require('fs').mkdirSync(parentDir, {recursive: true});
                 }
 
                 // Use fastGet to download the file directly to the specified path
@@ -743,6 +808,19 @@ class SshService extends EventEmitter {
             alert(`下载文件夹失败: ${error.message}`);
             showTransferStatus(false);
         }
+    }
+
+    // 获取会话缓冲区
+    async getSessionBuffer(sessionId) {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            return {success: false, error: '会话未找到'};
+        }
+
+        return {
+            success: true,
+            buffer: session.buffer || ''
+        };
     }
 }
 

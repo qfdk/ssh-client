@@ -13,18 +13,6 @@ const configStore = new ConfigStore();
 
 let mainWindow;
 
-// Register a custom protocol for serving local assets
-app.whenReady().then(() => {
-    protocol.registerFileProtocol('app', (request, callback) => {
-        const url = request.url.replace('app://', '');
-        try {
-            return callback(path.normalize(`${__dirname}/${url}`));
-        } catch (error) {
-            console.error('Protocol error:', error);
-        }
-    });
-});
-
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1200,
@@ -34,7 +22,8 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
             contextIsolation: true,
-            webSecurity: false // 允许加载本地文件
+            webSecurity: false, // 允许加载本地文件
+            allowRunningInsecureContent: true
         }
     });
 
@@ -106,6 +95,20 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+    protocol.registerFileProtocol('app', (request, callback) => {
+        const url = request.url.replace('app://', '');
+        try {
+            return callback(path.normalize(`${__dirname}/${url}`));
+        } catch (error) {
+            console.error('Protocol error:', error);
+        }
+    });
+
+    app.allowRendererProcessReuse = false;
+    app.commandLine.appendSwitch('no-sandbox');
+    app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors');
+    app.commandLine.appendSwitch('disable-features', 'BlockInsecurePrivateNetworkRequests');
+
     createWindow();
 
     app.on('activate', function () {
@@ -522,4 +525,45 @@ sshService.on('download-progress', (progressData) => {
     } catch (error) {
         console.error('处理下载进度事件时出错:', error);
     }
+});
+
+ipcMain.handle('ssh:get-session-buffer', async (event, sessionId) => {
+    try {
+        return await sshService.getSessionBuffer(sessionId);
+    } catch (error) {
+        console.error('获取会话缓冲区失败:', error);
+        return {success: false, error: error.message};
+    }
+});
+
+// 添加在 main.js 中
+const { spawn } = require('child_process');
+
+ipcMain.handle('ssh:connect-alternative', async (event, connectionDetails) => {
+    // 使用系统级网络命令测试连接
+    console.log(`尝试连接: ${connectionDetails.host}`);
+
+    // 首先测试端口是否可达
+    return new Promise((resolve) => {
+        // 使用底层系统网络操作代替 Node.js 网络 API
+        const process = spawn('nc', ['-G', '5', '-z', connectionDetails.host, connectionDetails.port || '22']);
+
+        process.on('close', (code) => {
+            const portOpen = code === 0;
+
+            if (portOpen) {
+                // 端口可达，正常进行 SSH 连接
+                sshService.connect(connectionDetails)
+                    .then(result => resolve(result))
+                    .catch(err => resolve({success: false, error: err.message}));
+            } else {
+                // 如果系统级网络测试失败，尝试用备用方法
+                resolve({
+                    success: false,
+                    error: `网络连接不可达: ${connectionDetails.host}:${connectionDetails.port || 22}`,
+                    needsAlternativeMethod: true
+                });
+            }
+        });
+    });
 });
