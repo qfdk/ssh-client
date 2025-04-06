@@ -8,10 +8,30 @@ const os = require('os');
 const sshService = require('./services/ssh-service');
 const ConfigStore = require('./services/config-store');
 
-// Initialize services
-const configStore = new ConfigStore();
-
+// 延迟初始化服务
+let configStore;
 let mainWindow;
+let tempHtmlPath;
+
+// 将协议注册逻辑分离到单独的函数
+function registerProtocols() {
+    protocol.registerFileProtocol('app', (request, callback) => {
+        const url = request.url.replace('app://', '');
+        try {
+            return callback(path.normalize(`${__dirname}/${url}`));
+        } catch (error) {
+            console.error('Protocol error:', error);
+        }
+    });
+}
+
+// 将命令行参数设置逻辑分离到单独的函数
+function setupCommandLineArgs() {
+    app.allowRendererProcessReuse = false;
+    app.commandLine.appendSwitch('no-sandbox');
+    app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors');
+    app.commandLine.appendSwitch('disable-features', 'BlockInsecurePrivateNetworkRequests');
+}
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -34,8 +54,46 @@ function createWindow() {
     }
 
     // 使用系统临时目录生成临时文件
-    const tempHtmlPath = path.join(tempDir, `index-${Date.now()}.html`);
+    tempHtmlPath = path.join(tempDir, `index-${Date.now()}.html`);
 
+    // 先加载加载页面
+    mainWindow.loadFile(path.join(__dirname, 'views', 'loading.html'));
+
+    // 窗口准备好后最大化并显示
+    mainWindow.once('ready-to-show', () => {
+        mainWindow.maximize();
+        mainWindow.show();
+        
+        // 窗口显示后再初始化服务和渲染主界面
+        setTimeout(() => {
+            initializeServices();
+            renderMainInterface();
+        }, 100);
+    });
+
+    // 窗口关闭时删除临时文件
+    mainWindow.on('closed', () => {
+        try {
+            if (fs.existsSync(tempHtmlPath)) {
+                fs.unlinkSync(tempHtmlPath);
+            }
+        } catch (e) {
+            console.error('删除临时文件失败:', e);
+        }
+    });
+
+    // 打开开发者工具帮助调试
+    // mainWindow.webContents.openDevTools();
+}
+
+// 初始化服务
+function initializeServices() {
+    // 延迟初始化配置存储
+    configStore = new ConfigStore();
+}
+
+// 将EJS渲染逻辑分离到单独的函数
+function renderMainInterface() {
     // 使用EJS渲染HTML内容
     ejs.renderFile(
         path.join(__dirname, 'views', 'index.ejs'),
@@ -70,45 +128,18 @@ function createWindow() {
 
             // 加载文件
             mainWindow.loadURL(`file://${tempHtmlPath}`);
-
-            // 窗口准备好后最大化并显示
-            mainWindow.once('ready-to-show', () => {
-                mainWindow.maximize();
-                mainWindow.show();
-            });
-
-            // 窗口关闭时删除临时文件
-            mainWindow.on('closed', () => {
-                try {
-                    if (fs.existsSync(tempHtmlPath)) {
-                        fs.unlinkSync(tempHtmlPath);
-                    }
-                } catch (e) {
-                    console.error('删除临时文件失败:', e);
-                }
-            });
         }
     );
-
-    // 打开开发者工具帮助调试
-    // mainWindow.webContents.openDevTools();
 }
 
 app.whenReady().then(() => {
-    protocol.registerFileProtocol('app', (request, callback) => {
-        const url = request.url.replace('app://', '');
-        try {
-            return callback(path.normalize(`${__dirname}/${url}`));
-        } catch (error) {
-            console.error('Protocol error:', error);
-        }
-    });
-
-    app.allowRendererProcessReuse = false;
-    app.commandLine.appendSwitch('no-sandbox');
-    app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors');
-    app.commandLine.appendSwitch('disable-features', 'BlockInsecurePrivateNetworkRequests');
-
+    // 注册协议处理器
+    registerProtocols();
+    
+    // 设置命令行参数
+    setupCommandLineArgs();
+    
+    // 创建窗口
     createWindow();
 
     app.on('activate', function () {
