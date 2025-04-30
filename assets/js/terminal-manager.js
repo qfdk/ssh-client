@@ -137,7 +137,7 @@ class TerminalManager {
     }
     
     // 初始化终端
-    async initTerminal(sessionId, existingSession = null, showBuffer = true) {
+    async initTerminal(sessionId, existingSession = null, showBuffer = true, clearContainerFirst = false) {
         try {
             console.log(`[initTerminal] 开始初始化终端 - 会话ID: ${sessionId}`);
             console.log(`[initTerminal] 现有会话信息:`, existingSession ? {
@@ -150,6 +150,11 @@ class TerminalManager {
             if (!container) {
                 console.error('找不到终端容器');
                 return null;
+            }
+
+            // 如果需要先清理容器，立即清空（解决切换服务器时的显示问题）
+            if (clearContainerFirst) {
+                container.innerHTML = '';
             }
     
             // 正确销毁现有终端
@@ -178,8 +183,10 @@ class TerminalManager {
                 }
             }
     
-            // 清理容器
-            container.innerHTML = '';
+            // 清理容器（如果前面没有清理过）
+            if (!clearContainerFirst) {
+                container.innerHTML = '';
+            }
     
             // 基本终端选项
             const termOptions = {
