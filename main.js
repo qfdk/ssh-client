@@ -151,23 +151,37 @@ app.on('window-all-closed', function () {
     if (process.platform !== 'darwin') app.quit();
 });
 
-// IPC Handlers for file operations
-ipcMain.handle('file:get-home-dir', async () => {
-    return os.homedir();
-});
+/**
+ * 通用IPC处理函数创建器 - 简化错误处理
+ * @param {Function} handler - 实际处理逻辑
+ * @returns {Function} - 包装了错误处理的处理函数
+ */
+function createIpcHandler(handler) {
+    return async (event, ...args) => {
+        try {
+            return await handler(event, ...args);
+        } catch (error) {
+            console.error('IPC处理错误:', error);
+            return { success: false, error: error.message || '操作失败' };
+        }
+    };
+}
 
-ipcMain.handle('file:list', async (event, {sessionId, path}) => {
-    try {
+// 使用这个函数来重构文件操作处理程序
+const fileOperationHandlers = {
+    // 获取主目录
+    'file:get-home-dir': createIpcHandler(async () => {
+        return os.homedir();
+    }),
+    
+    // 列出远程文件
+    'file:list': createIpcHandler(async (event, { sessionId, path }) => {
         const files = await sshService.listFiles(sessionId, path);
-        return {success: true, files};
-    } catch (error) {
-        return {success: false, error: error.message};
-    }
-});
+        return { success: true, files };
+    }),
 
-// Add this to your existing IPC handlers
-ipcMain.handle('file:list-local', async (event, directory) => {
-    try {
+    // 列出本地文件
+    'file:list-local': createIpcHandler(async (event, directory) => {
         const files = fs.readdirSync(directory);
         const fileDetails = files.map(file => {
             const filePath = path.join(directory, file);
@@ -180,7 +194,7 @@ ipcMain.handle('file:list-local', async (event, directory) => {
             };
         });
 
-        // Add parent directory entry if not at root
+        // 添加父目录条目（如果不在根目录）
         if (path.dirname(directory) !== directory) {
             fileDetails.unshift({
                 name: '..',
@@ -190,28 +204,25 @@ ipcMain.handle('file:list-local', async (event, directory) => {
             });
         }
 
-        return {success: true, files: fileDetails};
-    } catch (error) {
-        return {success: false, error: error.message};
-    }
-});
+        return { success: true, files: fileDetails };
+    }),
 
-ipcMain.handle('file:upload', async (event, {sessionId, localPath, remotePath}) => {
-    try {
+    // 上传文件
+    'file:upload': createIpcHandler(async (event, { sessionId, localPath, remotePath }) => {
         await sshService.uploadFile(sessionId, localPath, remotePath);
-        return {success: true};
-    } catch (error) {
-        return {success: false, error: error.message};
-    }
-});
+        return { success: true };
+    }),
 
-ipcMain.handle('file:download', async (event, {sessionId, remotePath, localPath}) => {
-    try {
+    // 下载文件
+    'file:download': createIpcHandler(async (event, { sessionId, remotePath, localPath }) => {
         await sshService.downloadFile(sessionId, remotePath, localPath);
-        return {success: true};
-    } catch (error) {
-        return {success: false, error: error.message};
-    }
+        return { success: true };
+    })
+};
+
+// 注册所有文件操作处理器
+Object.entries(fileOperationHandlers).forEach(([channel, handler]) => {
+    ipcMain.handle(channel, handler);
 });
 
 // IPC Handlers for configuration
@@ -475,30 +486,25 @@ ipcMain.handle('ssh:activate-session', async (event, sessionId) => {
     }
 });
 
-ipcMain.handle('file:delete-local', async (event, filePath) => {
-    try {
+// 扩展文件操作处理程序
+const additionalFileHandlers = {
+    // 删除本地文件
+    'file:delete-local': createIpcHandler(async (event, filePath) => {
         fs.unlinkSync(filePath);
-        return {success: true};
-    } catch (error) {
-        return {success: false, error: error.message};
-    }
-});
+        return { success: true };
+    }),
 
-// Delete local directory
-ipcMain.handle('file:delete-local-directory', async (event, dirPath) => {
-    try {
-        // For safety, we'll only delete empty directories by default
-        fs.rmdirSync(dirPath);
-        return {success: true};
-    } catch (error) {
-        // If error is because directory is not empty
-        if (error.code === 'ENOTEMPTY') {
-            try {
-                // Use a recursive delete as fallback if user confirms
-                // This is dangerous but sometimes necessary
+    // 删除本地目录
+    'file:delete-local-directory': createIpcHandler(async (event, dirPath) => {
+        try {
+            // 首先尝试删除空目录
+            fs.rmdirSync(dirPath);
+            return { success: true };
+        } catch (error) {
+            // 如果目录非空，则递归删除
+            if (error.code === 'ENOTEMPTY') {
                 const removeDir = (dir) => {
-                    const entries = fs.readdirSync(dir, {withFileTypes: true});
-
+                    const entries = fs.readdirSync(dir, { withFileTypes: true });
                     for (const entry of entries) {
                         const fullPath = path.join(dir, entry.name);
                         if (entry.isDirectory()) {
@@ -507,45 +513,38 @@ ipcMain.handle('file:delete-local-directory', async (event, dirPath) => {
                             fs.unlinkSync(fullPath);
                         }
                     }
-
                     fs.rmdirSync(dir);
                 };
 
                 removeDir(dirPath);
-                return {success: true};
-            } catch (recursiveError) {
-                return {success: false, error: `无法删除目录: ${recursiveError.message}`};
+                return { success: true };
             }
+            throw error; // 重新抛出其他错误
         }
-        return {success: false, error: error.message};
-    }
-});
-// Add this to your existing IPC handlers
-ipcMain.handle('file:create-remote-directory', async (event, {sessionId, remotePath}) => {
-    try {
+    }),
+
+    // 创建远程目录
+    'file:create-remote-directory': createIpcHandler(async (event, { sessionId, remotePath }) => {
         await sshService.createDirectory(sessionId, remotePath);
-        return {success: true};
-    } catch (error) {
-        return {success: false, error: error.message};
-    }
-});
+        return { success: true };
+    }),
 
-ipcMain.handle('file:upload-directory', async (event, {sessionId, localPath, remotePath}) => {
-    try {
+    // 上传目录
+    'file:upload-directory': createIpcHandler(async (event, { sessionId, localPath, remotePath }) => {
         await sshService.uploadDirectory(sessionId, localPath, remotePath);
-        return {success: true};
-    } catch (error) {
-        return {success: false, error: error.message};
-    }
-});
+        return { success: true };
+    }),
 
-ipcMain.handle('file:download-directory', async (event, {sessionId, remotePath, localPath}) => {
-    try {
+    // 下载目录
+    'file:download-directory': createIpcHandler(async (event, { sessionId, remotePath, localPath }) => {
         await sshService.downloadDirectory(sessionId, remotePath, localPath);
-        return {success: true};
-    } catch (error) {
-        return {success: false, error: error.message};
-    }
+        return { success: true };
+    })
+};
+
+// 注册额外的文件操作处理器
+Object.entries(additionalFileHandlers).forEach(([channel, handler]) => {
+    ipcMain.handle(channel, handler);
 });
 
 sshService.on('download-progress', (progressData) => {

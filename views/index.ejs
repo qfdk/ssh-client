@@ -17,6 +17,9 @@
     <% }); %>
 
     <!-- xterm.css will be loaded dynamically -->
+    
+    <!-- ES Module 兼容性检查 -->
+    <script src="app://assets/js/polyfill.js"></script>
 </head>
 <body>
 <div class="app-container">
@@ -53,7 +56,7 @@
 </div>
 <%- include('partials/connection-dialog') %>
 
-<!-- Load only the renderer.js, which will dynamically load xterm.js when needed -->
-<script src="app://renderer.js"></script>
+<!-- Load the modular JS files through the index entry point -->
+<script type="module" src="app://assets/js/index.js"></script>
 </body>
 </html>
