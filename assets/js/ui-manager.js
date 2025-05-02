@@ -293,21 +293,19 @@ class UIManager {
                 // 更新当前活动标签
                 window.activeTabId = tabId;
 
-                // 如果切换到文件管理器，初始化文件列表
+                // 如果切换到文件管理器，总是重新初始化文件列表
                 if (tabId === 'file-manager' && window.currentSessionId) {
-                    // 检查文件管理器是否需要初始化
-                    const needInit = !window.fileManager.fileManagerInitialized || 
-                                     window.sessionManager.getSessionByConnectionId(window.currentSessionId)?.sessionId !== window.currentSessionId;
-
-                    if (needInit) {
-                        // 显示文件管理器加载状态
-                        window.uiManager.showFileManagerLoading(true);
-                        // 延迟初始化以确保UI已更新
-                        setTimeout(() => {
-                            window.fileManager.initFileManager(window.currentSessionId);
-                            window.fileManager.fileManagerInitialized = true;
-                        }, 100);
-                    }
+                    // 显示文件管理器加载状态
+                    window.uiManager.showFileManagerLoading(true);
+                    // 清除文件管理器缓存
+                    window.fileManager.clearFileManagerCache();
+                    
+                    // 延迟初始化以确保UI已更新
+                    setTimeout(() => {
+                        // 确保使用最新的会话ID
+                        window.fileManager.initFileManager(window.currentSessionId);
+                        window.fileManager.fileManagerInitialized = true;
+                    }, 100);
                 }
 
                 // 如果切换到终端标签，调整终端大小，但不要刷新终端内容

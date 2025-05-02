@@ -1,8 +1,4 @@
-            // 先清空终端容器，避免看到前一个会话的内容
-            const terminalContainer = document.getElementById('terminal-container');
-            if (terminalContainer) {
-                terminalContainer.innerHTML = '';
-            }// connection-manager.js
+// connection-manager.js
 // 处理连接相关功能
 
 class ConnectionManager {
@@ -189,6 +185,21 @@ class ConnectionManager {
                         });
                         this.updateActiveConnectionItem(connectionId);
 
+                        // 重置文件管理器状态
+                        window.fileManager.fileManagerInitialized = false;
+                        
+                        // 如果当前活动标签是文件管理器，立即初始化它
+                        const activeTab = document.querySelector('.tab.active');
+                        if (activeTab && activeTab.getAttribute('data-tab') === 'file-manager') {
+                            // 显示文件管理器加载状态
+                            window.uiManager.showFileManagerLoading(true);
+                            // 延迟初始化以确保UI已更新
+                            setTimeout(() => {
+                                window.fileManager.initFileManager(result.sessionId);
+                                window.fileManager.fileManagerInitialized = true;
+                            }, 100);
+                        }
+
                         return true;
                     } else {
                         console.error('[switchToSession] 重新连接失败', result.error);
@@ -296,7 +307,9 @@ class ConnectionManager {
 
                 // 等待终端初始化完成后，再初始化文件管理器
                 setTimeout(() => {
-                    window.fileManager.initFileManager(sessionInfo.sessionId);
+                    // 确保使用最新的会话ID
+                    const currentSessionId = window.currentSessionId;
+                    window.fileManager.initFileManager(currentSessionId);
                     window.fileManager.fileManagerInitialized = true;
                 }, 100);
             }
@@ -331,7 +344,7 @@ class ConnectionManager {
                 return;
             }
 
-            // 立即清空终端容器，避免看到前一个会话的内容
+            // 先清空终端容器，避免看到前一个会话的内容
             const terminalContainer = document.getElementById('terminal-container');
             if (terminalContainer) {
                 terminalContainer.innerHTML = '';
@@ -592,9 +605,27 @@ class ConnectionManager {
                 // 更新活跃连接项状态
                 this.updateActiveConnectionItem(generatedId);
 
+                // 重置文件管理器状态
+                window.fileManager.fileManagerInitialized = false;
+
                 // 保持当前激活的标签类型
                 const activeTab = document.querySelector('.tab.active');
                 if (activeTab) {
+                    const tabId = activeTab.getAttribute('data-tab');
+                    
+                    // 如果当前活动标签是文件管理器，初始化它
+                    if (tabId === 'file-manager') {
+                        // 显示加载状态
+                        window.uiManager.showFileManagerLoading(true);
+                        
+                        // 短暂延迟确保会话准备就绪
+                        setTimeout(() => {
+                            window.fileManager.initFileManager(result.sessionId);
+                            window.fileManager.fileManagerInitialized = true;
+                        }, 100);
+                    }
+                    
+                    // 触发标签点击以确保UI状态一致
                     activeTab.click();
                 }
             } else {
@@ -696,6 +727,16 @@ class ConnectionManager {
 
                 window.uiManager.updateConnectionStatus(false);
                 window.uiManager.updateServerInfo(false);
+                
+                // 清理文件管理器状态
+                window.fileManager.clearFileManagerCache();
+                window.fileManager.fileManagerInitialized = false;
+                
+                // 清空文件管理器视图
+                const remoteFilesTbody = document.querySelector('#remote-files tbody');
+                if (remoteFilesTbody) {
+                    remoteFilesTbody.innerHTML = '';
+                }
             }
 
             // 更新连接列表

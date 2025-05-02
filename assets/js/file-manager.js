@@ -29,57 +29,66 @@ class FileManager {
             console.error('无法初始化文件管理器：未连接到服务器');
             return;
         }
+        
+        console.log(`开始初始化文件管理器，会话ID: ${sessionId}`);
 
-        // 清除现有远程文件列表
-        const remoteFilesTbody = document.querySelector('#remote-files tbody');
-        if (remoteFilesTbody) {
-            remoteFilesTbody.innerHTML = '';
-        }
+        try {
+            // 显示加载指示器
+            window.uiManager.showFileManagerLoading(true);
 
-        // 获取会话的远程工作目录或设置为根目录
-        let remotePath = '/';
-
-        // 尝试从会话管理器获取路径
-        const session = window.sessionManager.getSession(sessionId);
-        if (session && session.currentRemotePath) {
-            remotePath = session.currentRemotePath;
-        } else {
-            // 在会话管理器中初始化远程路径
-            window.sessionManager.updateRemotePath(sessionId, remotePath);
-        }
-
-        console.log(`初始化文件管理器，使用会话 ${sessionId} 的远程工作目录: ${remotePath}`);
-
-        // 更新远程路径输入
-        const remotePathInput = document.getElementById('remote-path');
-        if (remotePathInput) {
-            remotePathInput.value = remotePath;
-        }
-
-        // 加载远程文件
-        await this.loadRemoteFiles(remotePath);
-
-        // 清除现有本地文件列表
-        const localFilesTbody = document.querySelector('#local-files tbody');
-        if (localFilesTbody) {
-            localFilesTbody.innerHTML = '';
-        }
-
-        // 加载本地文件
-        if (this.lastLocalDirectory) {
-            await this.loadLocalFiles(this.lastLocalDirectory);
-        } else {
-            // 默认为用户主目录
-            try {
-                const homeDir = await window.api.file.getHomeDir();
-                await this.loadLocalFiles(homeDir);
-            } catch (error) {
-                console.error('获取用户主目录失败:', error);
+            // 清除现有远程文件列表
+            const remoteFilesTbody = document.querySelector('#remote-files tbody');
+            if (remoteFilesTbody) {
+                remoteFilesTbody.innerHTML = '';
             }
-        }
 
-        // 隐藏加载指示器
-        window.uiManager.showFileManagerLoading(false);
+            // 获取会话的远程工作目录或设置为根目录
+            let remotePath = '/';
+
+            // 尝试从会话管理器获取路径
+            const session = window.sessionManager.getSession(sessionId);
+            if (session && session.currentRemotePath) {
+                remotePath = session.currentRemotePath;
+            } else {
+                // 在会话管理器中初始化远程路径
+                window.sessionManager.updateRemotePath(sessionId, remotePath);
+            }
+
+            console.log(`初始化文件管理器，使用会话 ${sessionId} 的远程工作目录: ${remotePath}`);
+
+            // 更新远程路径输入
+            const remotePathInput = document.getElementById('remote-path');
+            if (remotePathInput) {
+                remotePathInput.value = remotePath;
+            }
+
+            // 加载远程文件
+            await this.loadRemoteFiles(remotePath);
+
+            // 清除现有本地文件列表
+            const localFilesTbody = document.querySelector('#local-files tbody');
+            if (localFilesTbody) {
+                localFilesTbody.innerHTML = '';
+            }
+
+            // 加载本地文件
+            if (this.lastLocalDirectory) {
+                await this.loadLocalFiles(this.lastLocalDirectory);
+            } else {
+                // 默认为用户主目录
+                try {
+                    const homeDir = await window.api.file.getHomeDir();
+                    await this.loadLocalFiles(homeDir);
+                } catch (error) {
+                    console.error('获取用户主目录失败:', error);
+                }
+            }
+        } catch (error) {
+            console.error('初始化文件管理器失败:', error);
+        } finally {
+            // 隐藏加载指示器
+            window.uiManager.showFileManagerLoading(false);
+        }
     }
     
     // 加载远程文件

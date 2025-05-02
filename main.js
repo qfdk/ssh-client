@@ -3,15 +3,47 @@ const path = require('path');
 const ejs = require('ejs');
 const fs = require('fs');
 const os = require('os');
+const { spawn } = require('child_process');
 
-// Import services
-const sshService = require('./services/ssh-service');
-const ConfigStore = require('./services/config-store');
-
-// 延迟初始化服务
-let configStore;
+// 惰性加载服务 - 仅在需要时才加载模块
+let _sshService = null;
+let _configStore = null;
 let mainWindow;
 let tempHtmlPath;
+
+/**
+ * 获取SSH服务实例 - 惰性加载
+ * @returns {Object} SSH服务实例
+ */
+function getSshService() {
+    if (!_sshService) {
+        console.log('惰性加载SSH服务');
+        _sshService = require('./services/ssh-service');
+        
+        // 设置SSH数据监听
+        _sshService.on('data', handleSshData);
+        
+        // 处理SSH连接关闭
+        _sshService.on('close', handleSshClose);
+        
+        // 处理下载进度事件
+        _sshService.on('download-progress', handleDownloadProgress);
+    }
+    return _sshService;
+}
+
+/**
+ * 获取配置存储实例 - 惰性加载
+ * @returns {Object} 配置存储实例
+ */
+function getConfigStore() {
+    if (!_configStore) {
+        console.log('惰性加载配置存储');
+        const ConfigStore = require('./services/config-store');
+        _configStore = new ConfigStore();
+    }
+    return _configStore;
+}
 
 // 将协议注册逻辑分离到单独的函数
 function registerProtocols() {
@@ -33,6 +65,9 @@ function setupCommandLineArgs() {
     app.commandLine.appendSwitch('disable-features', 'BlockInsecurePrivateNetworkRequests');
 }
 
+/**
+ * 创建主窗口
+ */
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1200,
@@ -66,7 +101,8 @@ function createWindow() {
         
         // 窗口显示后再初始化服务和渲染主界面
         setTimeout(() => {
-            initializeServices();
+            // 惰性加载服务 - 仅初始化配置存储
+            getConfigStore();
             renderMainInterface();
         }, 100);
     });
@@ -86,20 +122,16 @@ function createWindow() {
     // mainWindow.webContents.openDevTools();
 }
 
-// 初始化服务
-function initializeServices() {
-    // 延迟初始化配置存储
-    configStore = new ConfigStore();
-}
-
-// 将EJS渲染逻辑分离到单独的函数
+/**
+ * 渲染主界面
+ */
 function renderMainInterface() {
     // 使用EJS渲染HTML内容
     ejs.renderFile(
         path.join(__dirname, 'views', 'index.ejs'),
         {
             title: 'SSHL客户端',
-            connections: configStore.getConnections() || [],
+            connections: getConfigStore().getConnections() || [],
             basePath: __dirname
         },
         {root: path.join(__dirname, 'views')},
@@ -132,6 +164,79 @@ function renderMainInterface() {
     );
 }
 
+/**
+ * 处理SSH数据事件
+ * @param {string} sessionId - 会话ID
+ * @param {string|Buffer} data - 数据
+ */
+function handleSshData(sessionId, data) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    try {
+        // 确保data是字符串格式
+        const dataStr = typeof data === 'string' ? data : data.toString('utf8');
+
+        // 增加数据标识，帮助调试
+        const timestamp = Date.now();
+        const shortId = `${timestamp % 10000}`;
+
+        console.log(`[${shortId}] 向渲染进程发送数据，会话ID: ${sessionId}, 数据长度: ${dataStr.length}`);
+
+        mainWindow.webContents.send('ssh:data', {
+            sessionId,
+            data: dataStr,
+            timestamp,
+            id: shortId
+        });
+    } catch (error) {
+        console.error('处理SSH数据时出错:', error);
+    }
+}
+
+/**
+ * 处理SSH连接关闭事件
+ * @param {string} sessionId - 会话ID
+ */
+function handleSshClose(sessionId) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    try {
+        // 更新保存的连接状态
+        const configStore = getConfigStore();
+        const connections = configStore.getConnections();
+        const updatedConnections = connections.map(conn => {
+            if (conn.sessionId === sessionId) {
+                return {...conn, sessionId: null};
+            }
+            return conn;
+        });
+
+        if (JSON.stringify(connections) !== JSON.stringify(updatedConnections)) {
+            configStore.store.set('connections', updatedConnections);
+            mainWindow.webContents.send('connections:updated');
+        }
+
+        mainWindow.webContents.send('ssh:closed', {sessionId});
+    } catch (error) {
+        console.error('处理SSH关闭事件时出错:', error);
+    }
+}
+
+/**
+ * 处理下载进度事件
+ * @param {Object} progressData - 进度数据
+ */
+function handleDownloadProgress(progressData) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    try {
+        mainWindow.webContents.send('file:download-progress', progressData);
+    } catch (error) {
+        console.error('处理下载进度事件时出错:', error);
+    }
+}
+
+// 应用初始化
 app.whenReady().then(() => {
     // 注册协议处理器
     registerProtocols();
@@ -167,7 +272,7 @@ function createIpcHandler(handler) {
     };
 }
 
-// 使用这个函数来重构文件操作处理程序
+// 文件操作处理程序
 const fileOperationHandlers = {
     // 获取主目录
     'file:get-home-dir': createIpcHandler(async () => {
@@ -176,7 +281,7 @@ const fileOperationHandlers = {
     
     // 列出远程文件
     'file:list': createIpcHandler(async (event, { sessionId, path }) => {
-        const files = await sshService.listFiles(sessionId, path);
+        const files = await getSshService().listFiles(sessionId, path);
         return { success: true, files };
     }),
 
@@ -209,285 +314,16 @@ const fileOperationHandlers = {
 
     // 上传文件
     'file:upload': createIpcHandler(async (event, { sessionId, localPath, remotePath }) => {
-        await sshService.uploadFile(sessionId, localPath, remotePath);
+        await getSshService().uploadFile(sessionId, localPath, remotePath);
         return { success: true };
     }),
 
     // 下载文件
     'file:download': createIpcHandler(async (event, { sessionId, remotePath, localPath }) => {
-        await sshService.downloadFile(sessionId, remotePath, localPath);
+        await getSshService().downloadFile(sessionId, remotePath, localPath);
         return { success: true };
-    })
-};
-
-// 注册所有文件操作处理器
-Object.entries(fileOperationHandlers).forEach(([channel, handler]) => {
-    ipcMain.handle(channel, handler);
-});
-
-// IPC Handlers for configuration
-ipcMain.handle('config:get-connections', () => {
-    return configStore.getConnections();
-});
-
-ipcMain.handle('config:save-connection', (event, connection) => {
-    return configStore.saveConnection(connection);
-});
-
-ipcMain.handle('config:delete-connection', (event, id) => {
-    return configStore.deleteConnection(id);
-});
-
-ipcMain.handle('dialog:select-file', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-        properties: ['openFile']
-    });
-
-    if (result.canceled) {
-        return {canceled: true};
-    }
-
-    return {
-        canceled: false,
-        filePath: result.filePaths[0]
-    };
-});
-
-ipcMain.handle('dialog:select-directory', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-        properties: ['openDirectory']
-    });
-
-    if (result.canceled) {
-        return {canceled: true};
-    }
-
-    return {
-        canceled: false,
-        directoryPath: result.filePaths[0]
-    };
-});
-
-// SSH连接处理
-ipcMain.handle('ssh:connect', async (event, connectionDetails) => {
-    console.log('收到连接请求:', connectionDetails ?
-        `${connectionDetails.username}@${connectionDetails.host}:${connectionDetails.port || 22}` :
-        'undefined');
-
-    try {
-        if (!connectionDetails) {
-            return {success: false, error: '连接详情不能为空'};
-        }
-
-        if (!sshService) {
-            console.error('SSH服务未初始化');
-            return {success: false, error: 'SSH服务未初始化'};
-        }
-
-        const result = await sshService.connect(connectionDetails);
-        console.log('连接成功, 会话ID:', result.sessionId);
-        return {success: true, sessionId: result.sessionId};
-    } catch (error) {
-        console.error('SSH连接错误:', error);
-        return {success: false, error: error.message || '连接失败'};
-    }
-});
-
-ipcMain.handle('ssh:disconnect', async (event, sessionId) => {
-    console.log('断开连接请求:', sessionId);
-    try {
-        if (!sshService) {
-            return {success: false, error: 'SSH服务未初始化'};
-        }
-
-        await sshService.disconnect(sessionId);
-
-        // 更新保存的连接状态
-        const connections = configStore.getConnections();
-        const updatedConnections = connections.map(conn => {
-            if (conn.sessionId === sessionId) {
-                return {...conn, sessionId: null};
-            }
-            return conn;
-        });
-
-        if (JSON.stringify(connections) !== JSON.stringify(updatedConnections)) {
-            configStore.store.set('connections', updatedConnections);
-        }
-
-        return {success: true};
-    } catch (error) {
-        console.error('断开连接错误:', error);
-        return {success: false, error: error.message};
-    }
-});
-
-ipcMain.handle('ssh:send-data', async (event, {sessionId, data}) => {
-    //console.log('发送数据:', sessionId, data);
-    try {
-        if (!sshService) {
-            return {success: false, error: 'SSH服务未初始化'};
-        }
-
-        if (!sessionId) {
-            return {success: false, error: '会话ID不能为空'};
-        }
-
-        if (data === undefined || data === null) {
-            return {success: false, error: '数据不能为空'};
-        }
-
-        // 确保data是字符串
-        const dataStr = typeof data === 'string' ? data : data.toString('utf8');
-        const result = await sshService.sendData(sessionId, dataStr);
-
-        // 检查结果是否成功
-        if (result && result.success === false) {
-            console.log(`[sendData] 发送数据失败: ${result.error}`);
-            return {success: false, error: result.error || '发送数据失败'};
-        }
-
-        return {success: true};
-    } catch (error) {
-        console.error('发送数据错误:', error);
-        return {success: false, error: error.message};
-    }
-});
-
-ipcMain.handle('ssh:execute', async (event, {sessionId, command}) => {
-    console.log('执行命令:', sessionId, command);
-    try {
-        if (!sshService) {
-            return {success: false, error: 'SSH服务未初始化'};
-        }
-
-        const result = await sshService.executeCommand(sessionId, command);
-        return {success: true, output: result};
-    } catch (error) {
-        console.error('执行命令错误:', error);
-        return {success: false, error: error.message};
-    }
-});
-
-// 添加SSH数据监听
-sshService.on('data', (sessionId, data) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-
-    try {
-        // 确保data是字符串格式
-        const dataStr = typeof data === 'string' ? data : data.toString('utf8');
-
-        // 增加数据标识，帮助调试
-        const timestamp = Date.now();
-        const shortId = `${timestamp % 10000}`;
-
-        console.log(`[${shortId}] 向渲染进程发送数据，会话ID: ${sessionId}, 数据长度: ${dataStr.length}`);
-
-        mainWindow.webContents.send('ssh:data', {
-            sessionId,
-            data: dataStr,
-            timestamp,
-            id: shortId
-        });
-    } catch (error) {
-        console.error('处理SSH数据时出错:', error);
-    }
-});
-
-// 处理SSH连接关闭
-sshService.on('close', (sessionId) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-
-    try {
-        // 更新保存的连接状态
-        const connections = configStore.getConnections();
-        const updatedConnections = connections.map(conn => {
-            if (conn.sessionId === sessionId) {
-                return {...conn, sessionId: null};
-            }
-            return conn;
-        });
-
-        if (JSON.stringify(connections) !== JSON.stringify(updatedConnections)) {
-            configStore.store.set('connections', updatedConnections);
-            mainWindow.webContents.send('connections:updated');
-        }
-
-        mainWindow.webContents.send('ssh:closed', {sessionId});
-    } catch (error) {
-        console.error('处理SSH关闭事件时出错:', error);
-    }
-});
-
-ipcMain.handle('ssh:resize', async (event, {sessionId, cols, rows}) => {
-    try {
-        if (!sshService) {
-            return {success: false, error: 'SSH服务未初始化'};
-        }
-
-        const result = await sshService.resize(sessionId, cols, rows);
-
-        // 检查结果是否成功
-        if (result && result.success === false) {
-            console.log(`[resize] 调整终端大小失败: ${result.error}`);
-            return {success: false, error: result.error || '调整终端大小失败'};
-        }
-
-        return {success: true};
-    } catch (error) {
-        console.error('调整终端大小错误:', error);
-        return {success: false, error: error.message};
-    }
-});
-
-// 添加刷新命令提示符的处理程序
-ipcMain.handle('ssh:refresh-prompt', async (event, sessionId) => {
-    console.log('刷新命令提示符请求:', sessionId);
-    try {
-        if (!sshService) {
-            return {success: false, error: 'SSH服务未初始化'};
-        }
-
-        const result = await sshService.refreshPrompt(sessionId);
-
-        // 检查结果是否成功
-        if (result && result.success === false) {
-            console.log(`[refreshPrompt] 刷新命令提示符失败: ${result.error}`);
-            return {success: false, error: result.error || '刷新命令提示符失败'};
-        }
-
-        return {success: true};
-    } catch (error) {
-        console.error('刷新命令提示符错误:', error);
-        return {success: false, error: error.message};
-    }
-});
-
-// 添加激活会话的处理程序
-ipcMain.handle('ssh:activate-session', async (event, sessionId) => {
-    console.log('激活会话请求:', sessionId);
-    try {
-        if (!sshService) {
-            return {success: false, error: 'SSH服务未初始化'};
-        }
-
-        const result = await sshService.activateSession(sessionId);
-        if (result.success) {
-            // 确保返回更新的会话ID，即使它与原始会话ID相同
-            console.log(`会话激活成功，返回会话ID: ${result.sessionId || sessionId}`);
-            return {success: true, sessionId: result.sessionId || sessionId};
-        } else {
-            console.error('会话激活失败:', result.error || '未知错误');
-            return {success: false, error: result.error || '会话激活失败'};
-        }
-    } catch (error) {
-        console.error('激活会话错误:', error);
-        return {success: false, error: error.message};
-    }
-});
-
-// 扩展文件操作处理程序
-const additionalFileHandlers = {
+    }),
+    
     // 删除本地文件
     'file:delete-local': createIpcHandler(async (event, filePath) => {
         fs.unlinkSync(filePath);
@@ -525,75 +361,250 @@ const additionalFileHandlers = {
 
     // 创建远程目录
     'file:create-remote-directory': createIpcHandler(async (event, { sessionId, remotePath }) => {
-        await sshService.createDirectory(sessionId, remotePath);
+        await getSshService().createDirectory(sessionId, remotePath);
         return { success: true };
     }),
 
     // 上传目录
     'file:upload-directory': createIpcHandler(async (event, { sessionId, localPath, remotePath }) => {
-        await sshService.uploadDirectory(sessionId, localPath, remotePath);
+        await getSshService().uploadDirectory(sessionId, localPath, remotePath);
         return { success: true };
     }),
 
     // 下载目录
     'file:download-directory': createIpcHandler(async (event, { sessionId, remotePath, localPath }) => {
-        await sshService.downloadDirectory(sessionId, remotePath, localPath);
+        await getSshService().downloadDirectory(sessionId, remotePath, localPath);
         return { success: true };
     })
 };
 
-// 注册额外的文件操作处理器
-Object.entries(additionalFileHandlers).forEach(([channel, handler]) => {
-    ipcMain.handle(channel, handler);
-});
+// 配置操作处理程序
+const configOperationHandlers = {
+    // 获取连接列表
+    'config:get-connections': createIpcHandler(async () => {
+        return getConfigStore().getConnections();
+    }),
+    
+    // 保存连接
+    'config:save-connection': createIpcHandler(async (event, connection) => {
+        return getConfigStore().saveConnection(connection);
+    }),
+    
+    // 删除连接
+    'config:delete-connection': createIpcHandler(async (event, id) => {
+        return getConfigStore().deleteConnection(id);
+    })
+};
 
-sshService.on('download-progress', (progressData) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-
-    try {
-        mainWindow.webContents.send('file:download-progress', progressData);
-    } catch (error) {
-        console.error('处理下载进度事件时出错:', error);
-    }
-});
-
-ipcMain.handle('ssh:get-session-buffer', async (event, sessionId) => {
-    try {
-        return await sshService.getSessionBuffer(sessionId);
-    } catch (error) {
-        console.error('获取会话缓冲区失败:', error);
-        return {success: false, error: error.message};
-    }
-});
-
-// 添加在 main.js 中
-const { spawn } = require('child_process');
-
-ipcMain.handle('ssh:connect-alternative', async (event, connectionDetails) => {
-    // 使用系统级网络命令测试连接
-    console.log(`尝试连接: ${connectionDetails.host}`);
-
-    // 首先测试端口是否可达
-    return new Promise((resolve) => {
-        // 使用底层系统网络操作代替 Node.js 网络 API
-        const process = spawn('nc', ['-G', '5', '-z', connectionDetails.host, connectionDetails.port || '22']);
-
-        process.on('close', (code) => {
-            const portOpen = code === 0;
-
-            if (portOpen) {
-                // 端口可达，正常进行 SSH 连接
-                sshService.connect(connectionDetails)
-                    .then(result => resolve(result))
-                    .catch(err => resolve({success: false, error: err.message}));
-            } else {
-                // 如果系统级网络测试失败，尝试用备用方法
-                resolve({
-                    success: false,
-                    error: `网络连接不可达: ${connectionDetails.host}:${connectionDetails.port || 22}`,
-                    needsAlternativeMethod: true
-                });
-            }
+// 对话框操作处理程序
+const dialogOperationHandlers = {
+    // 选择文件
+    'dialog:select-file': createIpcHandler(async () => {
+        const result = await dialog.showOpenDialog(mainWindow, {
+            properties: ['openFile']
         });
+
+        if (result.canceled) {
+            return {canceled: true};
+        }
+
+        return {
+            canceled: false,
+            filePath: result.filePaths[0]
+        };
+    }),
+    
+    // 选择目录
+    'dialog:select-directory': createIpcHandler(async () => {
+        const result = await dialog.showOpenDialog(mainWindow, {
+            properties: ['openDirectory']
+        });
+
+        if (result.canceled) {
+            return {canceled: true};
+        }
+
+        return {
+            canceled: false,
+            directoryPath: result.filePaths[0]
+        };
+    })
+};
+
+// SSH操作处理程序
+const sshOperationHandlers = {
+    // SSH连接
+    'ssh:connect': createIpcHandler(async (event, connectionDetails) => {
+        console.log('收到连接请求:', connectionDetails ?
+            `${connectionDetails.username}@${connectionDetails.host}:${connectionDetails.port || 22}` :
+            'undefined');
+
+        if (!connectionDetails) {
+            return {success: false, error: '连接详情不能为空'};
+        }
+
+        const sshService = getSshService();
+        const result = await sshService.connect(connectionDetails);
+        console.log('连接成功, 会话ID:', result.sessionId);
+        return {success: true, sessionId: result.sessionId};
+    }),
+    
+    // SSH断开连接
+    'ssh:disconnect': createIpcHandler(async (event, sessionId) => {
+        console.log('断开连接请求:', sessionId);
+        
+        const sshService = getSshService();
+        await sshService.disconnect(sessionId);
+
+        // 更新保存的连接状态
+        const configStore = getConfigStore();
+        const connections = configStore.getConnections();
+        const updatedConnections = connections.map(conn => {
+            if (conn.sessionId === sessionId) {
+                return {...conn, sessionId: null};
+            }
+            return conn;
+        });
+
+        if (JSON.stringify(connections) !== JSON.stringify(updatedConnections)) {
+            configStore.store.set('connections', updatedConnections);
+        }
+
+        return {success: true};
+    }),
+    
+    // 发送数据
+    'ssh:send-data': createIpcHandler(async (event, {sessionId, data}) => {
+        if (!sessionId) {
+            return {success: false, error: '会话ID不能为空'};
+        }
+
+        if (data === undefined || data === null) {
+            return {success: false, error: '数据不能为空'};
+        }
+
+        // 确保data是字符串
+        const dataStr = typeof data === 'string' ? data : data.toString('utf8');
+        const result = await getSshService().sendData(sessionId, dataStr);
+
+        // 检查结果是否成功
+        if (result && result.success === false) {
+            console.log(`[sendData] 发送数据失败: ${result.error}`);
+            return {success: false, error: result.error || '发送数据失败'};
+        }
+
+        return {success: true};
+    }),
+    
+    // 执行命令
+    'ssh:execute': createIpcHandler(async (event, {sessionId, command}) => {
+        console.log('执行命令:', sessionId, command);
+        
+        const result = await getSshService().executeCommand(sessionId, command);
+        return {success: true, output: result};
+    }),
+    
+    // 调整大小
+    'ssh:resize': createIpcHandler(async (event, {sessionId, cols, rows}) => {
+        const result = await getSshService().resize(sessionId, cols, rows);
+
+        // 检查结果是否成功
+        if (result && result.success === false) {
+            console.log(`[resize] 调整终端大小失败: ${result.error}`);
+            return {success: false, error: result.error || '调整终端大小失败'};
+        }
+
+        return {success: true};
+    }),
+    
+    // 刷新提示符
+    'ssh:refresh-prompt': createIpcHandler(async (event, sessionId) => {
+        console.log('刷新命令提示符请求:', sessionId);
+        
+        const result = await getSshService().refreshPrompt(sessionId);
+
+        // 检查结果是否成功
+        if (result && result.success === false) {
+            console.log(`[refreshPrompt] 刷新命令提示符失败: ${result.error}`);
+            return {success: false, error: result.error || '刷新命令提示符失败'};
+        }
+
+        return {success: true};
+    }),
+    
+    // 激活会话
+    'ssh:activate-session': createIpcHandler(async (event, sessionId) => {
+        console.log('激活会话请求:', sessionId);
+        
+        const result = await getSshService().activateSession(sessionId);
+        if (result.success) {
+            // 确保返回更新的会话ID，即使它与原始会话ID相同
+            console.log(`会话激活成功，返回会话ID: ${result.sessionId || sessionId}`);
+            return {success: true, sessionId: result.sessionId || sessionId};
+        } else {
+            console.error('会话激活失败:', result.error || '未知错误');
+            return {success: false, error: result.error || '会话激活失败'};
+        }
+    }),
+    
+    // 获取会话缓冲区
+    'ssh:get-session-buffer': createIpcHandler(async (event, sessionId) => {
+        return await getSshService().getSessionBuffer(sessionId);
+    }),
+    
+    // 替代连接方法
+    'ssh:connect-alternative': createIpcHandler(async (event, connectionDetails) => {
+        // 使用系统级网络命令测试连接
+        console.log(`尝试连接: ${connectionDetails.host}`);
+
+        // 首先测试端口是否可达
+        return new Promise((resolve) => {
+            // 使用底层系统网络操作代替 Node.js 网络 API
+            const process = spawn('nc', ['-G', '5', '-z', connectionDetails.host, connectionDetails.port || '22']);
+
+            process.on('close', (code) => {
+                const portOpen = code === 0;
+
+                if (portOpen) {
+                    // 端口可达，正常进行 SSH 连接
+                    getSshService().connect(connectionDetails)
+                        .then(result => resolve(result))
+                        .catch(err => resolve({success: false, error: err.message}));
+                } else {
+                    // 如果系统级网络测试失败，尝试用备用方法
+                    resolve({
+                        success: false,
+                        error: `网络连接不可达: ${connectionDetails.host}:${connectionDetails.port || 22}`,
+                        needsAlternativeMethod: true
+                    });
+                }
+            });
+        });
+    })
+};
+
+// 注册所有IPC处理程序
+function registerAllHandlers() {
+    // 文件操作处理程序
+    Object.entries(fileOperationHandlers).forEach(([channel, handler]) => {
+        ipcMain.handle(channel, handler);
     });
-});
+    
+    // 配置操作处理程序
+    Object.entries(configOperationHandlers).forEach(([channel, handler]) => {
+        ipcMain.handle(channel, handler);
+    });
+    
+    // 对话框操作处理程序
+    Object.entries(dialogOperationHandlers).forEach(([channel, handler]) => {
+        ipcMain.handle(channel, handler);
+    });
+    
+    // SSH操作处理程序
+    Object.entries(sshOperationHandlers).forEach(([channel, handler]) => {
+        ipcMain.handle(channel, handler);
+    });
+}
+
+// 注册所有IPC处理程序
+registerAllHandlers();
