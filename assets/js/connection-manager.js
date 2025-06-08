@@ -40,7 +40,13 @@ class ConnectionManager {
                         <div class="connection-status-indicator ${statusClass}"></div>
                         <div class="connection-name">${connection.name}</div>
                         <div class="connection-actions">
-                            <button class="icon-button delete-connection" data-id="${connection.id}">
+                            <button class="icon-button edit-connection" data-id="${connection.id}" title="编辑连接">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                                    <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                </svg>
+                            </button>
+                            <button class="icon-button delete-connection" data-id="${connection.id}" title="删除连接">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
                                 </svg>
@@ -348,6 +354,51 @@ class ConnectionManager {
         }
     }
     
+    // 显示编辑连接对话框
+    showEditConnectionDialog(connection) {
+        // 填充表单字段
+        document.getElementById('conn-name').value = connection.name || '';
+        document.getElementById('conn-host').value = connection.host || '';
+        document.getElementById('conn-port').value = connection.port || 22;
+        document.getElementById('conn-username').value = connection.username || '';
+        
+        // 设置认证类型
+        const authTypeSelect = document.getElementById('auth-type');
+        authTypeSelect.value = connection.authType || 'password';
+        
+        // 触发认证类型变更事件，显示正确的字段
+        authTypeSelect.dispatchEvent(new Event('change'));
+        
+        // 根据认证类型填充相应字段
+        if (connection.authType === 'password') {
+            document.getElementById('conn-password').value = connection.password || '';
+        } else if (connection.authType === 'privateKey') {
+            document.getElementById('conn-private-key-path').value = connection.privateKey || '';
+            document.getElementById('conn-passphrase').value = connection.passphrase || '';
+        }
+        
+        // 设置保存密码选项
+        document.getElementById('conn-save-password').checked = !!(connection.password || connection.passphrase);
+        
+        // 存储正在编辑的连接ID，用于更新而不是创建新连接
+        const form = document.getElementById('connection-form');
+        form.dataset.editingId = connection.id;
+        
+        // 更新提交按钮文本
+        const submitBtn = document.getElementById('connection-submit-btn');
+        if (submitBtn) {
+            submitBtn.textContent = '保存';
+        }
+        
+        // 显示对话框
+        document.getElementById('connection-dialog').classList.add('active');
+        
+        // 聚焦到名称字段
+        setTimeout(() => {
+            document.getElementById('conn-name').focus();
+        }, 100);
+    }
+    
     // 连接到保存的连接
     async connectToSaved(id) {
         // 如果已经在连接中，则忽略
@@ -506,6 +557,15 @@ class ConnectionManager {
     async handleConnectionFormSubmit(e) {
         e.preventDefault();
 
+        const form = e.target;
+        const editingId = form.dataset.editingId;
+        
+        // 如果是编辑模式，只保存不连接
+        if (editingId) {
+            await this.handleEditConnection(editingId);
+            return;
+        }
+
         // 如果已经在连接中，则忽略
         if (this.isConnecting) return;
 
@@ -652,6 +712,68 @@ class ConnectionManager {
         } finally {
             this.isConnecting = false;
             window.uiManager.removeLoadingOverlay();
+        }
+    }
+    
+    // 处理编辑连接
+    async handleEditConnection(editingId) {
+        try {
+            const authType = document.getElementById('auth-type').value;
+            const savePassword = document.getElementById('conn-save-password').checked;
+
+            const connectionDetails = {
+                id: editingId, // 保持原有ID
+                name: document.getElementById('conn-name').value,
+                host: document.getElementById('conn-host').value,
+                port: parseInt(document.getElementById('conn-port').value),
+                username: document.getElementById('conn-username').value,
+                authType: authType
+            };
+
+            // 根据认证方式添加相应字段
+            if (authType === 'password') {
+                if (savePassword) {
+                    connectionDetails.password = document.getElementById('conn-password').value;
+                }
+            } else {
+                connectionDetails.privateKey = document.getElementById('conn-private-key-path').value;
+                if (savePassword) {
+                    const passphrase = document.getElementById('conn-passphrase').value;
+                    if (passphrase) {
+                        connectionDetails.passphrase = passphrase;
+                    }
+                }
+            }
+
+            // 保存更新的连接
+            if (window.api && window.api.config) {
+                const result = await window.api.config.saveConnection(connectionDetails);
+                if (result) {
+                    // 关闭对话框
+                    document.getElementById('connection-dialog').classList.remove('active');
+                    document.getElementById('connection-form').reset();
+                    
+                    // 清除编辑标记
+                    const form = document.getElementById('connection-form');
+                    delete form.dataset.editingId;
+                    
+                    // 重置提交按钮文本
+                    const submitBtn = document.getElementById('connection-submit-btn');
+                    if (submitBtn) {
+                        submitBtn.textContent = '连接';
+                    }
+                    
+                    // 重新加载连接列表
+                    await this.loadConnections();
+                    
+                    console.log('连接更新成功');
+                } else {
+                    alert('保存连接失败');
+                }
+            }
+        } catch (error) {
+            console.error('编辑连接失败:', error);
+            alert(`编辑连接失败: ${error.message}`);
         }
     }
     

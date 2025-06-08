@@ -343,6 +343,29 @@ function initializeApp() {
     
     // 添加连接项点击事件委托
     document.addEventListener('click', async function (event) {
+        // 编辑连接按钮
+        if (event.target.closest('.edit-connection')) {
+            const btn = event.target.closest('.edit-connection');
+            const id = btn.getAttribute('data-id');
+
+            try {
+                if (window.api && window.api.config) {
+                    const connections = await window.api.config.getConnections();
+                    const connection = connections.find(c => c.id === id);
+                    
+                    if (connection) {
+                        // 填充编辑表单并显示对话框
+                        connectionManager.showEditConnectionDialog(connection);
+                    }
+                }
+            } catch (error) {
+                console.error('编辑连接失败:', error);
+            }
+
+            event.stopPropagation();  // 阻止事件冒泡，不触发连接项的事件
+            return;
+        }
+
         // 删除连接按钮 (必须放在连接项处理前)
         if (event.target.closest('.delete-connection')) {
             const btn = event.target.closest('.delete-connection');

@@ -360,6 +360,16 @@ class UIManager {
                 // 重置认证方式为密码，并触发UI更新
                 document.getElementById('auth-type').value = 'password';
                 this.toggleAuthFields();
+                // 确保是新建模式，清除编辑标记
+                const form = document.getElementById('connection-form');
+                if (form) {
+                    delete form.dataset.editingId;
+                }
+                // 重置提交按钮文本
+                const submitBtn = document.getElementById('connection-submit-btn');
+                if (submitBtn) {
+                    submitBtn.textContent = '连接';
+                }
             });
         }
 
@@ -373,6 +383,13 @@ class UIManager {
                 // 重置认证方式为密码，并触发UI更新
                 document.getElementById('auth-type').value = 'password';
                 this.toggleAuthFields();
+                // 清除编辑模式标记
+                delete connectionForm.dataset.editingId;
+                // 重置提交按钮文本
+                const submitBtn = document.getElementById('connection-submit-btn');
+                if (submitBtn) {
+                    submitBtn.textContent = '连接';
+                }
             });
         }
 
