@@ -15,6 +15,8 @@ class SshService extends EventEmitter {
         this.connectionToSession = new Map(); // 存储连接ID到会话ID的映射
         this.sftpStatus = new Map(); // 存储连接的SFTP可用性状态
         this.execStatus = new Map(); // 存储连接的exec可用性状态
+        this.commandQueue = new Map(); // 存储每个连接的命令队列
+        this.fileManagerSessions = new Map(); // 存储连接到文件管理会话的映射
         
         // 设置定期清理过期连接
         setInterval(() => this.cleanExpiredConnections(), 30000); // 每30秒清理一次
@@ -37,6 +39,7 @@ class SshService extends EventEmitter {
                 this.connectionPool.delete(key);
                 this.sftpStatus.delete(key); // 同时清理SFTP状态
                 this.execStatus.delete(key); // 同时清理exec状态
+                this.fileManagerSessions.delete(key); // 同时清理文件管理会话映射
             }
         }
     }
@@ -76,12 +79,12 @@ class SshService extends EventEmitter {
         
         // 检查连接池中是否已存在此连接
         if (this.connectionPool.has(connectionKey)) {
-            const conn = this.connectionPool.get(connectionKey);
+            const connectionObj = this.connectionPool.get(connectionKey);
             // 检查连接是否仍然活跃
-            if (conn.isConnected) {
+            if (connectionObj.isConnected) {
                 console.log(`复用现有连接: ${connectionKey}`);
-                conn.lastUsed = Date.now(); // 更新最后使用时间
-                return { conn: conn.client, isNew: false, connectionKey };
+                connectionObj.lastUsed = Date.now(); // 更新最后使用时间
+                return { conn: connectionObj.client, connectionObj, isNew: false, connectionKey };
             }
         }
         
@@ -115,17 +118,21 @@ class SshService extends EventEmitter {
             username: connectionDetails.username,
             // 设置终端类型，以确保正确的shell环境
             term: 'xterm-color',
-            // 添加连接超时设置
+            // 连接超时设置
             readyTimeout: 30000,
-            // 增强keepalive设置
-            keepaliveInterval: 5000, // 每5秒发送keepalive
+            // SSH2官方推荐的keepalive设置
+            keepaliveInterval: 30000, // 30秒，避免过于频繁
             keepaliveCountMax: 3, // 最多3次keepalive失败后断开
-            // 添加算法协商配置
+            // 添加错误处理级别配置
+            debug: false, // 生产环境关闭调试
+            // 安全配置
+            hostVerifier: () => true, // 在生产环境中应该实现proper host key verification
+            // 简化算法配置，使用更兼容的默认算法
             algorithms: {
-                kex: ['diffie-hellman-group1-sha1', 'diffie-hellman-group14-sha1', 'diffie-hellman-group-exchange-sha256'],
-                cipher: ['aes128-ctr', 'aes192-ctr', 'aes256-ctr', 'aes128-gcm', 'aes256-gcm'],
-                hmac: ['hmac-sha2-256', 'hmac-sha2-512', 'hmac-sha1'],
-                compress: ['none', 'zlib@openssh.com', 'zlib']
+                kex: ['diffie-hellman-group14-sha256', 'diffie-hellman-group14-sha1'],
+                cipher: ['aes128-ctr', 'aes256-ctr'],
+                hmac: ['hmac-sha2-256', 'hmac-sha1'],
+                compress: ['none']
             }
         };
 
@@ -197,12 +204,19 @@ class SshService extends EventEmitter {
             });
             
             conn.on('error', (err) => {
-                // 连接失败处理
-                console.error(`连接错误: ${connectionKey}`, err);
-                connectionObj.isConnected = false;
-                // 移除失败的连接
-                if (this.connectionPool.get(connectionKey) === connectionObj) {
-                    this.connectionPool.delete(connectionKey);
+                // 连接失败处理，根据错误级别处理
+                const errorLevel = err.level || 'unknown';
+                console.error(`连接错误 [${errorLevel}]: ${connectionKey}`, err.message);
+                
+                // 根据错误级别决定处理策略
+                if (errorLevel === 'client-socket' || errorLevel === 'client-ssh') {
+                    connectionObj.isConnected = false;
+                    // 移除失败的连接
+                    if (this.connectionPool.get(connectionKey) === connectionObj) {
+                        this.connectionPool.delete(connectionKey);
+                        this.sftpStatus.delete(connectionKey);
+                        this.execStatus.delete(connectionKey);
+                    }
                 }
                 reject(err);
             });
@@ -535,6 +549,16 @@ class SshService extends EventEmitter {
             return { success: false, error: '会话未找到' };
         }
 
+        // 文件管理会话不需要shell流，只需要conn连接
+        if (session.isFileManager) {
+            if (!session.conn) {
+                console.error(`[${operationName}] 文件管理会话 ${sessionId} 缺少连接`);
+                return { success: false, error: '文件管理会话缺少连接' };
+            }
+            // 文件管理会话直接返回，不需要shell流
+            return { success: true, session, sessionId };
+        }
+
         if (!session.stream) {
             console.error(`[${operationName}] 会话 ${sessionId} 的shell未启动`);
             try {
@@ -716,7 +740,7 @@ class SshService extends EventEmitter {
     }
 
     /**
-     * 执行命令
+     * 执行命令 - 用于终端会话
      * @param {string} sessionId - 会话ID
      * @param {string} command - 命令
      * @returns {Promise<string>} - 执行结果
@@ -746,6 +770,82 @@ class SshService extends EventEmitter {
             // 标记exec不可用，避免下次重试
             this.execStatus.set(connectionKey, false);
             return this.executeCommandThroughShell(sessionId, command);
+        }
+    }
+
+    /**
+     * 为文件管理创建独立的SSH会话
+     * @param {Object} connectionDetails - 连接详情
+     * @returns {Promise<string>} - 文件管理会话ID
+     */
+    async createFileManagerSession(connectionDetails) {
+        try {
+            // 创建独立的文件管理会话ID
+            const fileSessionId = `file_${Date.now()}`;
+            
+            // 获取或创建连接
+            const { conn, connectionObj, isNew, connectionKey, connectOptions } = 
+                await this.getOrCreateConnection(connectionDetails);
+            
+            // 创建文件管理专用会话对象
+            this.sessions.set(fileSessionId, {
+                conn,
+                stream: null,
+                details: connectionDetails,
+                connectionKey,
+                connectionId: connectionDetails.id,
+                active: false, // 文件管理会话不需要终端输出
+                isFileManager: true, // 标记为文件管理会话
+                buffer: ''
+            });
+            
+            // 如果是新连接，需要连接
+            if (isNew) {
+                await this.setupConnection(conn, connectionObj, connectOptions, connectionKey);
+                this.connectionPool.set(connectionKey, connectionObj);
+            } else {
+                connectionObj.refCount++;
+                connectionObj.lastUsed = Date.now();
+            }
+            
+            console.log(`文件管理会话创建成功: ${fileSessionId}`);
+            return fileSessionId;
+            
+        } catch (error) {
+            console.error('创建文件管理会话失败:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * 为文件管理执行命令 - 使用独立会话
+     * @param {string} fileSessionId - 文件管理会话ID
+     * @param {string} command - 命令
+     * @returns {Promise<string>} - 执行结果
+     */
+    async executeFileCommand(fileSessionId, command) {
+        const sessionResult = await this.ensureActiveSession(fileSessionId, 'executeFileCommand');
+        if (!sessionResult.success) {
+            throw new Error(sessionResult.error);
+        }
+        
+        const session = sessionResult.session;
+        const connectionKey = session.connectionKey;
+
+        // 检查exec状态，如果已知不可用则直接抛出错误，不重试
+        if (this.execStatus.get(connectionKey) === false) {
+            console.log(`连接 ${connectionKey} 的exec已知不可用，跳过重试`);
+            throw new Error('exec通道不可用，服务器限制');
+        }
+
+        // 对于文件管理会话，只使用exec，不使用shell fallback
+        try {
+            return await this.executeWithExecRetry(session, command, 1); // 只尝试1次，不重试
+        } catch (error) {
+            // 标记exec不可用
+            this.execStatus.set(connectionKey, false);
+            console.warn(`文件管理命令执行失败: ${command}`, error.message);
+            throw new Error(`文件操作失败: ${error.message}`);
         }
     }
 
@@ -796,19 +896,29 @@ class SshService extends EventEmitter {
      * 通过现有shell执行命令(exec channel备用方案)
      * @param {string} sessionId - 会话ID
      * @param {string} command - 要执行的命令
+     * @param {boolean} silent - 是否静默执行（不显示在终端）
      * @returns {Promise<string>} - 命令输出
      */
-    async executeCommandThroughShell(sessionId, command) {
+    async executeCommandThroughShell(sessionId, command, silent = false) {
         const sessionResult = await this.ensureActiveSession(sessionId, 'executeCommandThroughShell');
         if (!sessionResult.success) {
             throw new Error(sessionResult.error);
         }
         
         const session = sessionResult.session;
+        const connectionKey = session.connectionKey;
         
         if (!session.stream) {
             throw new Error('Shell会话不可用');
         }
+
+        // 检查当前连接是否有正在执行的命令
+        if (this.commandQueue.has(connectionKey)) {
+            throw new Error('连接忙碌中，请稍后重试');
+        }
+
+        // 标记连接为忙碌
+        this.commandQueue.set(connectionKey, true);
 
         return new Promise((resolve, reject) => {
             let output = '';
@@ -820,17 +930,17 @@ class SshService extends EventEmitter {
                 if (!commandComplete) {
                     commandComplete = true;
                     session.stream.removeListener('data', dataHandler);
+                    this.commandQueue.delete(connectionKey); // 清理队列状态
                     reject(new Error('命令执行超时'));
                 }
-            }, 10000); // 10秒超时
+            }, 8000); // 减少到8秒超时
 
             // 生成唯一标记
             const startMarker = `__CMD_START_${Date.now()}__`;
             const endMarker = `__CMD_END_${Date.now()}__`;
             
-            // 构建命令，使用临时文件避免在终端显示
-            const tempFile = `/tmp/ssh_cmd_${Date.now()}`;
-            const fullCommand = `{ echo "${startMarker}"; ${command}; echo "${endMarker}"; } > ${tempFile} && cat ${tempFile} && rm ${tempFile}`;
+            // 使用更简单的方法，避免临时文件
+            const fullCommand = `printf "${startMarker}\\n"; ${command}; printf "\\n${endMarker}\\n"`;
 
             // 监听数据
             const dataHandler = (data) => {
@@ -866,6 +976,9 @@ class SshService extends EventEmitter {
                         
                         // 移除数据处理器
                         session.stream.removeListener('data', dataHandler);
+                        
+                        // 清理队列状态
+                        this.commandQueue.delete(connectionKey);
                         
                         // 清理输出（移除多余的换行和空白）
                         const result = output.trim();
@@ -911,27 +1024,44 @@ class SshService extends EventEmitter {
      * @returns {Promise<Array>} - 文件列表
      */
     async listFiles(sessionId, remotePath) {
-        const sessionResult = await this.ensureActiveSession(sessionId, 'listFiles');
+        // 对于文件列表操作，如果传入的是用户会话，获取或创建文件管理会话
+        let fileSessionId = sessionId;
+        const session = this.sessions.get(sessionId);
+        
+        if (session && !session.isFileManager) {
+            const connectionKey = session.connectionKey;
+            // 检查是否已有文件管理会话
+            if (this.fileManagerSessions.has(connectionKey)) {
+                fileSessionId = this.fileManagerSessions.get(connectionKey);
+                console.log(`复用文件管理会话: ${fileSessionId}`);
+            } else {
+                // 创建新的文件管理会话
+                fileSessionId = await this.createFileManagerSession(session.details);
+                this.fileManagerSessions.set(connectionKey, fileSessionId);
+            }
+        }
+        
+        const sessionResult = await this.ensureActiveSession(fileSessionId, 'listFiles');
         if (!sessionResult.success) {
             throw new Error(sessionResult.error);
         }
         
-        const session = sessionResult.session;
-        const connectionKey = session.connectionKey;
+        const fileSession = sessionResult.session;
+        const connectionKey = fileSession.connectionKey;
 
         // 检查是否已知SFTP不可用，如果是则直接使用SSH命令
         if (this.sftpStatus.get(connectionKey) === false) {
-            return this.listFilesWithSSH(sessionId, remotePath);
+            return this.listFilesWithSSH(fileSessionId, remotePath);
         }
 
         return new Promise((resolve, reject) => {
-            session.conn.sftp((err, sftp) => {
+            fileSession.conn.sftp((err, sftp) => {
                 if (err) {
                     console.warn('SFTP不可用，尝试使用SSH命令:', err.message);
                     // 标记SFTP不可用，避免重复尝试
                     this.sftpStatus.set(connectionKey, false);
                     // 如果SFTP不可用，使用SSH命令作为备用方案
-                    this.listFilesWithSSH(sessionId, remotePath)
+                    this.listFilesWithSSH(fileSessionId, remotePath)
                         .then(resolve)
                         .catch(reject);
                     return;
@@ -944,7 +1074,7 @@ class SshService extends EventEmitter {
                     if (err) {
                         console.warn('SFTP readdir失败，尝试使用SSH命令:', err.message);
                         // 如果SFTP readdir失败，也尝试SSH命令
-                        this.listFilesWithSSH(sessionId, remotePath)
+                        this.listFilesWithSSH(fileSessionId, remotePath)
                             .then(resolve)
                             .catch(reject);
                         return;
@@ -983,7 +1113,7 @@ class SshService extends EventEmitter {
                         }));
 
                         // 尝试获取用户名和组名
-                        this.enrichWithUserInfo(sessionId, detailedList)
+                        this.enrichWithUserInfo(fileSessionId, detailedList)
                             .then(enrichedList => resolve(enrichedList))
                             .catch(() => resolve(detailedList)); // 如果获取用户信息失败，返回基本信息
                             
@@ -1015,9 +1145,26 @@ class SshService extends EventEmitter {
      */
     async listFilesWithSSH(sessionId, remotePath) {
         try {
+            // 检查exec状态，如果不可用则通过用户会话获取
+            const session = this.sessions.get(sessionId);
+            const connectionKey = session?.connectionKey;
+            
+            if (this.execStatus.get(connectionKey) === false) {
+                console.log('exec不可用，通过用户会话获取文件列表');
+                return this.listFilesViaUserSession(sessionId, remotePath);
+            }
+            
             // 使用 ls -la 命令获取详细文件信息，禁用颜色输出
             const command = `LANG=C.UTF-8 LC_ALL=C.UTF-8 ls -la --color=never "${remotePath}" 2>/dev/null || LANG=C.UTF-8 LC_ALL=C.UTF-8 ls -la --color=never "${remotePath}/" 2>/dev/null`;
-            const result = await this.executeCommand(sessionId, command);
+            
+            let result;
+            try {
+                result = await this.executeFileCommand(sessionId, command);
+            } catch (error) {
+                // 如果executeFileCommand失败（通常是exec不可用），切换到用户会话
+                console.log('executeFileCommand失败，切换到用户会话');
+                return this.listFilesViaUserSession(sessionId, remotePath);
+            }
             
             if (!result || result.trim() === '') {
                 throw new Error('目录为空或无法访问');
@@ -1071,7 +1218,20 @@ class SshService extends EventEmitter {
                 files.push(fileInfo);
             }
             
-            return files;
+            // 检查exec状态，如果不可用则不尝试获取用户信息（避免在终端显示命令）
+            if (this.execStatus.get(connectionKey) === false) {
+                console.log('exec不可用，跳过用户信息获取，保持UID/GID显示');
+                return files;
+            }
+            
+            // 尝试获取用户名和组名
+            try {
+                const enrichedFiles = await this.enrichWithUserInfo(sessionId, files);
+                return enrichedFiles;
+            } catch (error) {
+                console.warn('获取用户信息失败，返回基本信息:', error.message);
+                return files;
+            }
             
         } catch (error) {
             console.error('SSH命令列出文件失败:', error);
@@ -1160,6 +1320,93 @@ class SshService extends EventEmitter {
     }
 
     /**
+     * 通过用户会话获取文件列表（当exec不可用时）
+     * @param {string} fileSessionId - 文件管理会话ID
+     * @param {string} remotePath - 远程路径
+     * @returns {Promise<Array>} - 文件列表
+     */
+    async listFilesViaUserSession(fileSessionId, remotePath) {
+        try {
+            // 找到对应的用户会话
+            const session = this.sessions.get(fileSessionId);
+            if (!session) {
+                throw new Error('会话不存在');
+            }
+            
+            const userSession = Array.from(this.sessions.values()).find(s => 
+                s.connectionKey === session.connectionKey && !s.isFileManager && s.active
+            );
+            
+            if (!userSession) {
+                throw new Error('没有可用的用户会话');
+            }
+            
+            // 通过用户会话执行ls命令
+            const command = `LANG=C.UTF-8 LC_ALL=C.UTF-8 ls -la --color=never "${remotePath}" 2>/dev/null || LANG=C.UTF-8 LC_ALL=C.UTF-8 ls -la --color=never "${remotePath}/" 2>/dev/null`;
+            const userSessionId = Array.from(this.sessions.keys()).find(k => this.sessions.get(k) === userSession);
+            const result = await this.executeCommandThroughShell(userSessionId, command, true);
+            
+            if (!result || result.trim() === '') {
+                throw new Error('目录为空或无法访问');
+            }
+            
+            // 清理ANSI转义序列
+            const cleanResult = result.replace(/\x1b\[[0-9;]*m/g, '');
+            const lines = cleanResult.split('\n').filter(line => line.trim());
+            const files = [];
+            
+            // 跳过第一行（总计行）
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                
+                // 解析 ls -la 输出
+                const parts = line.split(/\s+/);
+                if (parts.length < 9) continue;
+                
+                const permissions = parts[0];
+                const owner = parts[2];  // 已经是用户名
+                const group = parts[3];  // 已经是组名
+                const size = parseInt(parts[4]) || 0;
+                
+                // 获取文件名（处理包含空格的文件名）
+                const nameStartIndex = line.indexOf(parts[8]);
+                const fileName = line.substring(nameStartIndex);
+                
+                // 跳过 . 和 .. 目录项
+                if (fileName === '.' || fileName === '..') continue;
+                
+                // 解析日期
+                const month = parts[5];
+                const day = parts[6];
+                const timeOrYear = parts[7];
+                const modifyTime = this.parseFileDate(month, day, timeOrYear);
+                
+                const fileInfo = {
+                    name: fileName,
+                    fullPath: remotePath === '/' ? `/${fileName}` : `${remotePath}/${fileName}`,
+                    isDirectory: permissions.startsWith('d'),
+                    size: size,
+                    modifyTime: modifyTime,
+                    permissions: this.convertPermissionsToOctal(permissions),
+                    owner: owner,  // 直接使用ls输出的用户名
+                    group: group,  // 直接使用ls输出的组名
+                    uid: 0,  // 通过ls无法获取数字UID
+                    gid: 0   // 通过ls无法获取数字GID
+                };
+                
+                files.push(fileInfo);
+            }
+            
+            return files;
+            
+        } catch (error) {
+            console.error('通过用户会话获取文件列表失败:', error);
+            throw new Error(`无法访问目录: ${error.message}`);
+        }
+    }
+
+    /**
      * 通过执行系统命令获取用户和组信息
      * @param {string} sessionId - 会话ID
      * @param {Array} fileList - 文件列表
@@ -1174,10 +1421,37 @@ class SshService extends EventEmitter {
             const userMap = new Map();
             const groupMap = new Map();
             
-            // 批量获取用户名
+            // 尝试获取用户和组信息，但如果失败就使用UID/GID
+            const session = this.sessions.get(sessionId);
+            
+            // 如果是文件管理会话且exec已知不可用，或者任何会话的exec状态为false，直接使用用户终端会话
+            if (session && (
+                (session.isFileManager && this.execStatus.get(session.connectionKey) === false) ||
+                this.execStatus.get(session.connectionKey) === false
+            )) {
+                // 寻找同一连接的用户会话
+                const userSession = Array.from(this.sessions.values()).find(s => 
+                    s.connectionKey === session.connectionKey && !s.isFileManager && s.active
+                );
+                
+                if (userSession) {
+                    console.log('exec不可用，直接使用用户会话获取用户信息');
+                    return this.getUserInfoFromUserSession(userSession, fileList);
+                }
+                
+                // 如果没有用户会话，直接返回带有UID/GID的列表
+                console.log('没有可用的用户会话，保持UID/GID显示');
+                return fileList.map(file => ({
+                    ...file,
+                    owner: file.uid?.toString() || 'unknown',
+                    group: file.gid?.toString() || 'unknown'
+                }));
+            }
+            
+            // 批量获取用户名 (原有逻辑)
             if (uids.length > 0) {
                 try {
-                    const userResult = await this.executeCommand(sessionId, `getent passwd ${uids.join(' ')} 2>/dev/null || true`);
+                    const userResult = await this.executeFileCommand(sessionId, `getent passwd ${uids.join(' ')} 2>/dev/null || true`);
                     const userLines = userResult.split('\n').filter(line => line.trim());
                     userLines.forEach(line => {
                         const parts = line.split(':');
@@ -1190,10 +1464,10 @@ class SshService extends EventEmitter {
                 }
             }
             
-            // 批量获取组名
+            // 批量获取组名 (原有逻辑)
             if (gids.length > 0) {
                 try {
-                    const groupResult = await this.executeCommand(sessionId, `getent group ${gids.join(' ')} 2>/dev/null || true`);
+                    const groupResult = await this.executeFileCommand(sessionId, `getent group ${gids.join(' ')} 2>/dev/null || true`);
                     const groupLines = groupResult.split('\n').filter(line => line.trim());
                     groupLines.forEach(line => {
                         const parts = line.split(':');
@@ -1216,6 +1490,87 @@ class SshService extends EventEmitter {
         } catch (error) {
             console.warn('增强用户信息失败:', error);
             return fileList;
+        }
+    }
+
+    /**
+     * 通过用户终端会话获取用户信息
+     * @param {Object} userSession - 用户会话对象
+     * @param {Array} fileList - 文件列表
+     * @returns {Promise<Array>} - 增强后的文件列表
+     */
+    async getUserInfoFromUserSession(userSession, fileList) {
+        try {
+            const userMap = new Map();
+            const groupMap = new Map();
+            
+            // 获取所有唯一的 UID 和 GID
+            const uids = [...new Set(fileList.map(f => f.uid).filter(uid => uid !== undefined))];
+            const gids = [...new Set(fileList.map(f => f.gid).filter(gid => gid !== undefined))];
+            
+            // 获取用户会话的sessionId
+            const userSessionId = Array.from(this.sessions.keys()).find(k => this.sessions.get(k) === userSession);
+            if (!userSessionId) {
+                throw new Error('无法找到用户会话ID');
+            }
+            
+            // 通过用户会话的shell执行命令获取用户信息
+            if (uids.length > 0) {
+                try {
+                    // 确保UIDs是有效的数字
+                    const validUids = uids.filter(uid => uid != null && !isNaN(uid) && uid >= 0);
+                    if (validUids.length === 0) {
+                        console.log('没有有效的UID，跳过用户信息获取');
+                    } else {
+                        const userResult = await this.executeCommandThroughShell(userSessionId, `getent passwd ${validUids.join(' ')} 2>/dev/null || true`);
+                        const userLines = userResult.split('\n').filter(line => line.trim());
+                        userLines.forEach(line => {
+                            const parts = line.split(':');
+                            if (parts.length >= 3) {
+                                userMap.set(parseInt(parts[2]), parts[0]);
+                            }
+                        });
+                    }
+                } catch (err) {
+                    console.warn('通过用户会话获取用户信息失败:', err.message);
+                }
+            }
+            
+            if (gids.length > 0) {
+                try {
+                    // 确保GIDs是有效的数字
+                    const validGids = gids.filter(gid => gid != null && !isNaN(gid) && gid >= 0);
+                    if (validGids.length === 0) {
+                        console.log('没有有效的GID，跳过组信息获取');
+                    } else {
+                        const groupResult = await this.executeCommandThroughShell(userSessionId, `getent group ${validGids.join(' ')} 2>/dev/null || true`);
+                        const groupLines = groupResult.split('\n').filter(line => line.trim());
+                        groupLines.forEach(line => {
+                            const parts = line.split(':');
+                            if (parts.length >= 3) {
+                                groupMap.set(parseInt(parts[2]), parts[0]);
+                            }
+                        });
+                    }
+                } catch (err) {
+                    console.warn('通过用户会话获取组信息失败:', err.message);
+                }
+            }
+            
+            // 应用用户和组信息
+            return fileList.map(file => ({
+                ...file,
+                owner: userMap.get(file.uid) || file.uid?.toString() || 'unknown',
+                group: groupMap.get(file.gid) || file.gid?.toString() || 'unknown'
+            }));
+            
+        } catch (error) {
+            console.warn('通过用户会话获取用户信息失败:', error);
+            return fileList.map(file => ({
+                ...file,
+                owner: file.uid?.toString() || 'unknown',
+                group: file.gid?.toString() || 'unknown'
+            }));
         }
     }
 

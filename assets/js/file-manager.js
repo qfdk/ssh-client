@@ -429,8 +429,30 @@ class FileManager {
                 if (name === '..') {
                     // 从DOM获取当前路径，而不是使用可能过期的currentPath变量
                     const currentPath = document.getElementById('remote-path').value || '/';
-                    const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/'));
-                    newPath = parentPath === '' ? '/' : parentPath;
+                    console.log('当前路径:', currentPath);
+                    
+                    // 处理根目录情况
+                    if (currentPath === '/' || currentPath === '') {
+                        console.log('已在根目录，无法返回上级');
+                        return;
+                    }
+                    
+                    // 移除末尾的斜杠（如果有）
+                    const cleanPath = currentPath.replace(/\/+$/, '');
+                    const lastSlashIndex = cleanPath.lastIndexOf('/');
+                    
+                    if (lastSlashIndex === 0) {
+                        // 如果最后一个斜杠在位置0，说明父目录是根目录
+                        newPath = '/';
+                    } else if (lastSlashIndex > 0) {
+                        // 正常情况，截取到最后一个斜杠之前
+                        newPath = cleanPath.substring(0, lastSlashIndex);
+                    } else {
+                        // 没有找到斜杠，这种情况不应该发生，但作为保护
+                        newPath = '/';
+                    }
+                    
+                    console.log('计算出的父路径:', newPath);
                 } else {
                     newPath = row.dataset.path.replace(/\/+/g, '/');
                 }
