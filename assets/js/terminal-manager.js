@@ -93,10 +93,20 @@ class TerminalManager {
                             term.open(container);
                             fitAddon.fit();
     
-                            // 添加窗口大小调整事件监听器
-                            window.addEventListener('resize', () => {
-                                fitAddon.fit();
-                            });
+                            // 添加窗口大小调整事件监听器（使用防抖）
+                            const resizeHandler = debounce(() => {
+                                if (fitAddon && term) {
+                                    fitAddon.fit();
+                                }
+                            }, 50);
+                            
+                            window.addEventListener('resize', resizeHandler);
+                            
+                            // 存储清理函数
+                            term._resizeHandler = resizeHandler;
+                            term._cleanup = () => {
+                                window.removeEventListener('resize', resizeHandler);
+                            };
     
                             // 强制延迟以确保适当的大小
                             setTimeout(() => {
@@ -209,6 +219,11 @@ class TerminalManager {
                         this.currentTerminalDataHandler = null;
                     }
     
+                    // 清理自定义的事件监听器
+                    if (this.activeTerminal._cleanup) {
+                        this.activeTerminal._cleanup();
+                    }
+                    
                     // 然后销毁终端
                     this.activeTerminal.dispose();
                     this.activeTerminal = null;

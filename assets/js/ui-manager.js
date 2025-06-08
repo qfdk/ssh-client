@@ -318,7 +318,7 @@ class UIManager {
                 } else {
                     window.terminalManager.isTabSwitching = false; // 重置其他标签的标志
                 }
-            }, 300)); // 添加300毫秒防抖延迟
+            }, 100)); // 减少防抖延迟到100毫秒提高响应性
         });
         
         // 侧边栏折叠/展开

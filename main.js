@@ -365,6 +365,28 @@ const fileOperationHandlers = {
     'file:download-directory': createIpcHandler(async (event, { sessionId, remotePath, localPath }) => {
         await getSshService().downloadDirectory(sessionId, remotePath, localPath);
         return { success: true };
+    }),
+
+    // 修改文件权限
+    'file:change-permissions': createIpcHandler(async (event, { sessionId, remotePath, permissions }) => {
+        try {
+            const result = await getSshService().changeFilePermissions(sessionId, remotePath, permissions);
+            return { success: result };
+        } catch (error) {
+            console.error('修改文件权限失败:', error);
+            return { success: false, error: error.message };
+        }
+    }),
+
+    // 修改文件所有者
+    'file:change-owner': createIpcHandler(async (event, { sessionId, remotePath, owner, group }) => {
+        try {
+            const result = await getSshService().changeFileOwner(sessionId, remotePath, owner, group);
+            return { success: result };
+        } catch (error) {
+            console.error('修改文件所有者失败:', error);
+            return { success: false, error: error.message };
+        }
     })
 };
 

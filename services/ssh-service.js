@@ -13,9 +13,11 @@ class SshService extends EventEmitter {
         this.sessions = new Map(); // 存储会话信息
         this.connectionPool = new Map(); // 存储连接池
         this.connectionToSession = new Map(); // 存储连接ID到会话ID的映射
+        this.sftpStatus = new Map(); // 存储连接的SFTP可用性状态
+        this.execStatus = new Map(); // 存储连接的exec可用性状态
         
         // 设置定期清理过期连接
-        setInterval(() => this.cleanExpiredConnections(), 60000); // 每分钟清理一次
+        setInterval(() => this.cleanExpiredConnections(), 30000); // 每30秒清理一次
     }
 
     /**
@@ -33,6 +35,8 @@ class SshService extends EventEmitter {
                     conn.client.end();
                 }
                 this.connectionPool.delete(key);
+                this.sftpStatus.delete(key); // 同时清理SFTP状态
+                this.execStatus.delete(key); // 同时清理exec状态
             }
         }
     }
@@ -113,7 +117,16 @@ class SshService extends EventEmitter {
             term: 'xterm-color',
             // 添加连接超时设置
             readyTimeout: 30000,
-            keepaliveInterval: 10000
+            // 增强keepalive设置
+            keepaliveInterval: 5000, // 每5秒发送keepalive
+            keepaliveCountMax: 3, // 最多3次keepalive失败后断开
+            // 添加算法协商配置
+            algorithms: {
+                kex: ['diffie-hellman-group1-sha1', 'diffie-hellman-group14-sha1', 'diffie-hellman-group-exchange-sha256'],
+                cipher: ['aes128-ctr', 'aes192-ctr', 'aes256-ctr', 'aes128-gcm', 'aes256-gcm'],
+                hmac: ['hmac-sha2-256', 'hmac-sha2-512', 'hmac-sha1'],
+                compress: ['none', 'zlib@openssh.com', 'zlib']
+            }
         };
 
         // 检测本地网络连接并应用特殊设置
@@ -715,28 +728,180 @@ class SshService extends EventEmitter {
         }
         
         const session = sessionResult.session;
+        const connectionKey = session.connectionKey;
+
+        // 检查exec状态缓存，如果已知不可用则直接使用shell
+        if (this.execStatus.get(connectionKey) === false) {
+            return this.executeCommandThroughShell(sessionId, command);
+        }
+
+        // 尝试使用exec，如果失败则使用shell fallback
+        try {
+            const result = await this.executeWithExecRetry(session, command, 1); // 只重试1次
+            // exec成功，标记为可用
+            this.execStatus.set(connectionKey, true);
+            return result;
+        } catch (error) {
+            console.warn('Exec不可用，使用shell fallback:', error.message);
+            // 标记exec不可用，避免下次重试
+            this.execStatus.set(connectionKey, false);
+            return this.executeCommandThroughShell(sessionId, command);
+        }
+    }
+
+    /**
+     * 使用exec重试执行命令，避免使用用户shell
+     * @param {Object} session - 会话对象
+     * @param {string} command - 要执行的命令
+     * @param {number} retries - 重试次数
+     * @returns {Promise<string>} - 命令输出
+     */
+    async executeWithExecRetry(session, command, retries = 3) {
+        return new Promise((resolve, reject) => {
+            const tryExec = (attempt) => {
+                session.conn.exec(command, (err, stream) => {
+                    if (err) {
+                        console.warn(`exec命令失败 (尝试 ${attempt}/${retries}):`, err.message);
+                        if (attempt < retries) {
+                            // 等待一小段时间后重试
+                            setTimeout(() => tryExec(attempt + 1), 1000 * attempt);
+                            return;
+                        } else {
+                            // 所有重试都失败了
+                            reject(new Error(`命令执行失败，已重试${retries}次: ${err.message}`));
+                            return;
+                        }
+                    }
+
+                    let data = '';
+                    stream.on('data', (chunk) => {
+                        data += chunk.toString('utf8');
+                    });
+
+                    stream.stderr.on('data', (chunk) => {
+                        data += chunk.toString('utf8');
+                    });
+
+                    stream.on('close', () => {
+                        resolve(data);
+                    });
+                });
+            };
+
+            tryExec(1);
+        });
+    }
+
+    /**
+     * 通过现有shell执行命令(exec channel备用方案)
+     * @param {string} sessionId - 会话ID
+     * @param {string} command - 要执行的命令
+     * @returns {Promise<string>} - 命令输出
+     */
+    async executeCommandThroughShell(sessionId, command) {
+        const sessionResult = await this.ensureActiveSession(sessionId, 'executeCommandThroughShell');
+        if (!sessionResult.success) {
+            throw new Error(sessionResult.error);
+        }
+        
+        const session = sessionResult.session;
+        
+        if (!session.stream) {
+            throw new Error('Shell会话不可用');
+        }
 
         return new Promise((resolve, reject) => {
-            session.conn.exec(command, (err, stream) => {
-                if (err) {
-                    reject(err);
+            let output = '';
+            let commandComplete = false;
+            let collectingOutput = false;
+            let originalDataHandlers = [];
+            
+            const timeout = setTimeout(() => {
+                if (!commandComplete) {
+                    commandComplete = true;
+                    session.stream.removeListener('data', dataHandler);
+                    reject(new Error('命令执行超时'));
+                }
+            }, 10000); // 10秒超时
+
+            // 生成唯一标记
+            const startMarker = `__CMD_START_${Date.now()}__`;
+            const endMarker = `__CMD_END_${Date.now()}__`;
+            
+            // 构建命令，使用临时文件避免在终端显示
+            const tempFile = `/tmp/ssh_cmd_${Date.now()}`;
+            const fullCommand = `{ echo "${startMarker}"; ${command}; echo "${endMarker}"; } > ${tempFile} && cat ${tempFile} && rm ${tempFile}`;
+
+            // 监听数据
+            const dataHandler = (data) => {
+                const chunk = data.toString('utf8');
+                
+                // 开始收集输出
+                if (chunk.includes(startMarker)) {
+                    collectingOutput = true;
+                    output = '';
+                    // 移除开始标记之前的内容
+                    const startIndex = chunk.indexOf(startMarker);
+                    if (startIndex !== -1) {
+                        const afterStart = chunk.substring(startIndex + startMarker.length);
+                        if (afterStart.trim()) {
+                            output += afterStart;
+                        }
+                    }
                     return;
                 }
+                
+                // 收集命令输出
+                if (collectingOutput) {
+                    // 检查是否包含结束标记
+                    if (chunk.includes(endMarker)) {
+                        commandComplete = true;
+                        clearTimeout(timeout);
+                        
+                        // 添加结束标记之前的内容
+                        const endIndex = chunk.indexOf(endMarker);
+                        if (endIndex !== -1) {
+                            output += chunk.substring(0, endIndex);
+                        }
+                        
+                        // 移除数据处理器
+                        session.stream.removeListener('data', dataHandler);
+                        
+                        // 清理输出（移除多余的换行和空白）
+                        const result = output.trim();
+                        resolve(result);
+                    } else {
+                        output += chunk;
+                    }
+                } else {
+                    // 命令执行前的输出也不要发送到终端
+                    // 静默处理
+                }
+            };
 
-                let data = '';
-                stream.on('data', (chunk) => {
-                    data += chunk.toString('utf8');
-                });
-
-                stream.stderr.on('data', (chunk) => {
-                    data += chunk.toString('utf8');
-                });
-
-                stream.on('close', () => {
-                    resolve(data);
-                });
-            });
+            session.stream.on('data', dataHandler);
+            
+            // 发送命令
+            session.stream.write(fullCommand + '\n');
         });
+    }
+
+    /**
+     * 暂时拦截数据流，避免发送到终端
+     */
+    temporarilyInterceptData(stream) {
+        // 不移除现有处理器，而是标记拦截状态
+        // 这样可以避免破坏现有的数据流处理
+        return [];
+    }
+
+    /**
+     * 恢复原始数据处理器
+     */
+    restoreDataHandlers(stream, originalHandlers, temporaryHandler) {
+        // 移除临时处理器
+        stream.removeListener('data', temporaryHandler);
+        // 不需要恢复处理器，因为我们没有移除它们
     }
 
     /**
@@ -752,31 +917,306 @@ class SshService extends EventEmitter {
         }
         
         const session = sessionResult.session;
+        const connectionKey = session.connectionKey;
+
+        // 检查是否已知SFTP不可用，如果是则直接使用SSH命令
+        if (this.sftpStatus.get(connectionKey) === false) {
+            return this.listFilesWithSSH(sessionId, remotePath);
+        }
 
         return new Promise((resolve, reject) => {
             session.conn.sftp((err, sftp) => {
                 if (err) {
-                    reject(err);
+                    console.warn('SFTP不可用，尝试使用SSH命令:', err.message);
+                    // 标记SFTP不可用，避免重复尝试
+                    this.sftpStatus.set(connectionKey, false);
+                    // 如果SFTP不可用，使用SSH命令作为备用方案
+                    this.listFilesWithSSH(sessionId, remotePath)
+                        .then(resolve)
+                        .catch(reject);
                     return;
                 }
 
-                sftp.readdir(remotePath, (err, list) => {
+                // 标记SFTP可用
+                this.sftpStatus.set(connectionKey, true);
+                
+                sftp.readdir(remotePath, async (err, list) => {
                     if (err) {
-                        reject(err);
+                        console.warn('SFTP readdir失败，尝试使用SSH命令:', err.message);
+                        // 如果SFTP readdir失败，也尝试SSH命令
+                        this.listFilesWithSSH(sessionId, remotePath)
+                            .then(resolve)
+                            .catch(reject);
                         return;
                     }
 
-                    resolve(list.map(item => ({
-                        name: item.filename,
-                        fullPath: `${remotePath}/${item.filename}`,
-                        isDirectory: item.attrs.isDirectory(),
-                        size: item.attrs.size,
-                        modifyTime: new Date(item.attrs.mtime * 1000),
-                        permissions: item.attrs.mode
-                    })));
+                    try {
+                        // 获取详细文件信息包括所有者
+                        const detailedList = await Promise.all(list.map(async (item) => {
+                            const itemPath = remotePath === '/' ? `/${item.filename}` : `${remotePath}/${item.filename}`;
+                            
+                            return new Promise((resolveItem) => {
+                                sftp.stat(itemPath, (statErr, stats) => {
+                                    const fileInfo = {
+                                        name: item.filename,
+                                        fullPath: itemPath,
+                                        isDirectory: item.attrs.isDirectory(),
+                                        size: item.attrs.size,
+                                        modifyTime: new Date(item.attrs.mtime * 1000),
+                                        permissions: item.attrs.mode,
+                                        uid: item.attrs.uid,
+                                        gid: item.attrs.gid,
+                                        owner: 'unknown',
+                                        group: 'unknown'
+                                    };
+                                    
+                                    // 如果 stat 成功，使用更详细的信息
+                                    if (!statErr && stats) {
+                                        fileInfo.uid = stats.uid;
+                                        fileInfo.gid = stats.gid;
+                                        fileInfo.permissions = stats.mode;
+                                    }
+                                    
+                                    resolveItem(fileInfo);
+                                });
+                            });
+                        }));
+
+                        // 尝试获取用户名和组名
+                        this.enrichWithUserInfo(sessionId, detailedList)
+                            .then(enrichedList => resolve(enrichedList))
+                            .catch(() => resolve(detailedList)); // 如果获取用户信息失败，返回基本信息
+                            
+                    } catch (error) {
+                        // 如果获取详细信息失败，返回基本信息
+                        resolve(list.map(item => ({
+                            name: item.filename,
+                            fullPath: `${remotePath}/${item.filename}`,
+                            isDirectory: item.attrs.isDirectory(),
+                            size: item.attrs.size,
+                            modifyTime: new Date(item.attrs.mtime * 1000),
+                            permissions: item.attrs.mode,
+                            uid: item.attrs.uid || 0,
+                            gid: item.attrs.gid || 0,
+                            owner: 'unknown',
+                            group: 'unknown'
+                        })));
+                    }
                 });
             });
         });
+    }
+
+    /**
+     * 使用SSH命令列出文件（SFTP备用方案）
+     * @param {string} sessionId - 会话ID 
+     * @param {string} remotePath - 远程路径
+     * @returns {Promise<Array>} - 文件列表
+     */
+    async listFilesWithSSH(sessionId, remotePath) {
+        try {
+            // 使用 ls -la 命令获取详细文件信息，禁用颜色输出
+            const command = `LANG=C.UTF-8 LC_ALL=C.UTF-8 ls -la --color=never "${remotePath}" 2>/dev/null || LANG=C.UTF-8 LC_ALL=C.UTF-8 ls -la --color=never "${remotePath}/" 2>/dev/null`;
+            const result = await this.executeCommand(sessionId, command);
+            
+            if (!result || result.trim() === '') {
+                throw new Error('目录为空或无法访问');
+            }
+            
+            // 清理ANSI转义序列（颜色代码）
+            const cleanResult = result.replace(/\x1b\[[0-9;]*m/g, '');
+            
+            const lines = cleanResult.split('\n').filter(line => line.trim());
+            const files = [];
+            
+            // 跳过第一行（总计行）
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                
+                // 解析 ls -la 输出
+                const parts = line.split(/\s+/);
+                if (parts.length < 9) continue;
+                
+                const permissions = parts[0];
+                const linkCount = parts[1];
+                const owner = parts[2];
+                const group = parts[3];
+                const size = parseInt(parts[4]) || 0;
+                const month = parts[5];
+                const day = parts[6];
+                const timeOrYear = parts[7];
+                const name = parts.slice(8).join(' ');
+                
+                // 跳过 . 和 .. (如果需要的话)
+                if (name === '.' || name === '..') continue;
+                
+                // 判断是否为目录
+                const isDirectory = permissions.startsWith('d');
+                
+                // 构造文件信息对象
+                const fileInfo = {
+                    name: name,
+                    fullPath: remotePath === '/' ? `/${name}` : `${remotePath}/${name}`,
+                    isDirectory: isDirectory,
+                    size: isDirectory ? 0 : size,
+                    modifyTime: this.parseFileDate(month, day, timeOrYear),
+                    permissions: this.convertPermissionsToOctal(permissions),
+                    owner: owner,
+                    group: group,
+                    uid: 0, // SSH命令无法获取UID，设为0
+                    gid: 0  // SSH命令无法获取GID，设为0
+                };
+                
+                files.push(fileInfo);
+            }
+            
+            return files;
+            
+        } catch (error) {
+            console.error('SSH命令列出文件失败:', error);
+            throw new Error(`无法访问目录: ${error.message}`);
+        }
+    }
+    
+    /**
+     * 解析文件日期
+     * @param {string} month - 月份
+     * @param {string} day - 日期  
+     * @param {string} timeOrYear - 时间或年份
+     * @returns {Date} - 日期对象
+     */
+    parseFileDate(month, day, timeOrYear) {
+        const months = {
+            'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
+            'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
+        };
+        
+        const monthNum = months[month] || 0;
+        const dayNum = parseInt(day) || 1;
+        
+        let year, hour = 0, minute = 0;
+        
+        if (timeOrYear.includes(':')) {
+            // 时间格式 (HH:MM)，使用当前年份
+            year = new Date().getFullYear();
+            const timeParts = timeOrYear.split(':');
+            hour = parseInt(timeParts[0]) || 0;
+            minute = parseInt(timeParts[1]) || 0;
+        } else {
+            // 年份格式
+            year = parseInt(timeOrYear) || new Date().getFullYear();
+        }
+        
+        return new Date(year, monthNum, dayNum, hour, minute);
+    }
+
+    /**
+     * 将权限字符串转换为八进制数字
+     * @param {string} permStr - 权限字符串（如 'drwxr-xr-x'）
+     * @returns {number} - 八进制权限数字
+     */
+    convertPermissionsToOctal(permStr) {
+        if (!permStr || permStr.length < 10) {
+            return 0;
+        }
+        
+        // 跳过第一个字符（文件类型）
+        const perms = permStr.slice(1);
+        let octal = 0;
+        
+        // 所有者权限 (rwx) - 第7-9位
+        let userPerm = 0;
+        if (perms[0] === 'r') userPerm += 4;
+        if (perms[1] === 'w') userPerm += 2;
+        if (perms[2] === 'x' || perms[2] === 's' || perms[2] === 'S') userPerm += 1;
+        octal += userPerm * 64; // 左移6位 (8^2)
+        
+        // 组权限 (rwx) - 第4-6位
+        let groupPerm = 0;
+        if (perms[3] === 'r') groupPerm += 4;
+        if (perms[4] === 'w') groupPerm += 2;
+        if (perms[5] === 'x' || perms[5] === 's' || perms[5] === 'S') groupPerm += 1;
+        octal += groupPerm * 8; // 左移3位 (8^1)
+        
+        // 其他用户权限 (rwx) - 第1-3位
+        let otherPerm = 0;
+        if (perms[6] === 'r') otherPerm += 4;
+        if (perms[7] === 'w') otherPerm += 2;
+        if (perms[8] === 'x' || perms[8] === 't' || perms[8] === 'T') otherPerm += 1;
+        octal += otherPerm; // 不需要左移
+        
+        // 添加文件类型位
+        const fileType = permStr[0];
+        if (fileType === 'd') octal += 0o40000; // 目录
+        else if (fileType === 'l') octal += 0o120000; // 符号链接
+        else if (fileType === 'c') octal += 0o20000; // 字符设备
+        else if (fileType === 'b') octal += 0o60000; // 块设备
+        else if (fileType === 'p') octal += 0o10000; // 命名管道
+        else if (fileType === 's') octal += 0o140000; // 套接字
+        else octal += 0o100000; // 普通文件
+        
+        return octal;
+    }
+
+    /**
+     * 通过执行系统命令获取用户和组信息
+     * @param {string} sessionId - 会话ID
+     * @param {Array} fileList - 文件列表
+     * @returns {Promise<Array>} - 增强后的文件列表
+     */
+    async enrichWithUserInfo(sessionId, fileList) {
+        try {
+            // 获取所有唯一的 UID 和 GID
+            const uids = [...new Set(fileList.map(f => f.uid).filter(uid => uid !== undefined))];
+            const gids = [...new Set(fileList.map(f => f.gid).filter(gid => gid !== undefined))];
+            
+            const userMap = new Map();
+            const groupMap = new Map();
+            
+            // 批量获取用户名
+            if (uids.length > 0) {
+                try {
+                    const userResult = await this.executeCommand(sessionId, `getent passwd ${uids.join(' ')} 2>/dev/null || true`);
+                    const userLines = userResult.split('\n').filter(line => line.trim());
+                    userLines.forEach(line => {
+                        const parts = line.split(':');
+                        if (parts.length >= 3) {
+                            userMap.set(parseInt(parts[2]), parts[0]);
+                        }
+                    });
+                } catch (err) {
+                    console.warn('获取用户信息失败:', err.message);
+                }
+            }
+            
+            // 批量获取组名
+            if (gids.length > 0) {
+                try {
+                    const groupResult = await this.executeCommand(sessionId, `getent group ${gids.join(' ')} 2>/dev/null || true`);
+                    const groupLines = groupResult.split('\n').filter(line => line.trim());
+                    groupLines.forEach(line => {
+                        const parts = line.split(':');
+                        if (parts.length >= 3) {
+                            groupMap.set(parseInt(parts[2]), parts[0]);
+                        }
+                    });
+                } catch (err) {
+                    console.warn('获取组信息失败:', err.message);
+                }
+            }
+            
+            // 应用用户和组信息
+            return fileList.map(file => ({
+                ...file,
+                owner: userMap.get(file.uid) || file.uid?.toString() || 'unknown',
+                group: groupMap.get(file.gid) || file.gid?.toString() || 'unknown'
+            }));
+            
+        } catch (error) {
+            console.warn('增强用户信息失败:', error);
+            return fileList;
+        }
     }
 
     /**
@@ -1067,6 +1507,60 @@ class SshService extends EventEmitter {
             success: true,
             buffer: session.buffer || ''
         };
+    }
+
+    /**
+     * 修改文件权限
+     * @param {string} sessionId - 会话ID
+     * @param {string} remotePath - 远程文件路径
+     * @param {string} permissions - 权限（八进制字符串，如 '755'）
+     * @returns {Promise<boolean>}
+     */
+    async changeFilePermissions(sessionId, remotePath, permissions) {
+        const sessionResult = await this.ensureActiveSession(sessionId, 'changeFilePermissions');
+        if (!sessionResult.success) {
+            throw new Error(sessionResult.error);
+        }
+        
+        const session = sessionResult.session;
+
+        try {
+            // 使用 chmod 命令修改权限
+            const command = `chmod ${permissions} "${remotePath}"`;
+            await this.executeCommand(sessionId, command);
+            return true;
+        } catch (error) {
+            console.error('修改文件权限失败:', error);
+            throw new Error(`修改文件权限失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 修改文件所有者
+     * @param {string} sessionId - 会话ID
+     * @param {string} remotePath - 远程文件路径
+     * @param {string} owner - 新的所有者
+     * @param {string} group - 新的组（可选）
+     * @returns {Promise<boolean>}
+     */
+    async changeFileOwner(sessionId, remotePath, owner, group = null) {
+        const sessionResult = await this.ensureActiveSession(sessionId, 'changeFileOwner');
+        if (!sessionResult.success) {
+            throw new Error(sessionResult.error);
+        }
+        
+        const session = sessionResult.session;
+
+        try {
+            // 使用 chown 命令修改所有者
+            const ownerGroup = group ? `${owner}:${group}` : owner;
+            const command = `chown ${ownerGroup} "${remotePath}"`;
+            await this.executeCommand(sessionId, command);
+            return true;
+        } catch (error) {
+            console.error('修改文件所有者失败:', error);
+            throw new Error(`修改文件所有者失败: ${error.message}`);
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 /* 优化新建连接按钮 */
 #new-connection-btn {
-    background-color: #3498db;
+    background-color: #5695D7;
     color: white;
     border: none;
     border-radius: 6px;
@@ -17,13 +17,13 @@
 }
 
 #new-connection-btn:hover {
-    background-color: #2980b9;
+    background-color: #4a7fb8;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
     transform: translateY(-1px);
 }
 
 #new-connection-btn:active {
-    background-color: #1c6ea4;
+    background-color: #3e6da3;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
     transform: translateY(1px);
 }
@@ -66,9 +66,9 @@
 }
 
 .connection-item:hover {
-    background-color: rgba(52, 152, 219, 0.1);
+    background-color: rgba(86, 149, 215, 0.1);
 }
 
 .connection-item[data-active="true"] {
-    background-color: rgba(52, 152, 219, 0.2);
+    background-color: rgba(86, 149, 215, 0.2);
 }

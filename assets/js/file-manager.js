@@ -39,10 +39,18 @@ class LRUCache {
 
 class FileManager {
     constructor() {
-        this.remoteFileCache = new LRUCache(30); // 远程文件缓存
-        this.localFileCache = new LRUCache(30); // 本地文件缓存
+        this.remoteFileCache = new LRUCache(50); // 增加缓存大小
+        this.localFileCache = new LRUCache(50); // 增加缓存大小
         this.lastLocalDirectory = null; // 记住上次的本地目录
         this.fileManagerInitialized = false; // 文件管理器是否已初始化
+        
+        // DOM 元素缓存
+        this.domCache = {
+            remoteFilesTbody: null,
+            localFilesTbody: null,
+            remotePathInput: null,
+            localPathInput: null
+        };
         
         // 简单的路径工具函数
         this.path = {
@@ -59,6 +67,24 @@ class FileManager {
         };
     }
     
+    // 获取缓存的 DOM 元素
+    getCachedElement(key, selector) {
+        if (!this.domCache[key]) {
+            this.domCache[key] = document.querySelector(selector);
+        }
+        return this.domCache[key];
+    }
+    
+    // 清除 DOM 缓存
+    clearDOMCache() {
+        this.domCache = {
+            remoteFilesTbody: null,
+            localFilesTbody: null,
+            remotePathInput: null,
+            localPathInput: null
+        };
+    }
+    
     // 初始化文件管理器
     async initFileManager(sessionId) {
         if (!sessionId) {
@@ -72,8 +98,8 @@ class FileManager {
             // 显示加载指示器
             window.uiManager.showFileManagerLoading(true);
 
-            // 清除现有远程文件列表
-            const remoteFilesTbody = document.querySelector('#remote-files tbody');
+            // 清除现有远程文件列表（使用缓存）
+            const remoteFilesTbody = this.getCachedElement('remoteFilesTbody', '#remote-files tbody');
             if (remoteFilesTbody) {
                 remoteFilesTbody.innerHTML = '';
             }
@@ -135,6 +161,9 @@ class FileManager {
             return;
         }
 
+        // 调试：检查 currentSessionId 的类型
+        console.log('loadRemoteFiles - currentSessionId:', window.currentSessionId, 'type:', typeof window.currentSessionId);
+
         try {
             // 规范化路径
             path = path.replace(/\/+/g, '/');
@@ -151,24 +180,27 @@ class FileManager {
                 remotePathInput.value = path;
             }
 
+            // 确保传递字符串类型的sessionId
+            const sessionId = String(window.currentSessionId);
+
             // 更新会话的远程工作目录
-            window.sessionManager.updateRemotePath(window.currentSessionId, path);
+            window.sessionManager.updateRemotePath(sessionId, path);
 
             // 记录请求
-            console.log(`请求远程文件列表: 会话ID ${window.currentSessionId}, 路径 ${path}`);
+            console.log(`请求远程文件列表: 会话ID ${sessionId}, 路径 ${path}`);
 
             // 在读取文件前先验证会话是否有效
-            const session = window.sessionManager.getSession(window.currentSessionId);
+            const session = window.sessionManager.getSession(sessionId);
             if (!session || !session.active) {
                 throw new Error('会话已失效，请重新连接');
             }
 
             // 发起请求
-            const result = await window.api.file.list(window.currentSessionId, path);
+            const result = await window.api.file.list(sessionId, path);
 
             if (result.success) {
                 // 更新缓存
-                const cacheKey = `${window.currentSessionId}:${path}`;
+                const cacheKey = `${sessionId}:${path}`;
                 this.remoteFileCache.set(cacheKey, result.files);
                 console.log('更新远程文件缓存:', cacheKey);
 
@@ -176,31 +208,9 @@ class FileManager {
                 this.displayRemoteFiles(result.files, path);
             } else {
                 console.error('获取远程文件失败:', result.error);
-
-                // 检查特定SFTP错误
-                if (result.error && result.error.includes('Channel open failure')) {
-                    // 这可能是SFTP子系统问题，显示一个更明确的错误
-                    console.log('尝试使用SSH命令代替SFTP获取文件列表');
-
-                    try {
-                        // 尝试使用普通SSH命令列出文件（作为备用方案）
-                        const lsResult = await window.api.ssh.execute(window.currentSessionId, `ls -la "${path}"`);
-                        if (lsResult && lsResult.trim && lsResult.trim().length > 0) {
-                            // 如果命令成功但我们只是不能使用SFTP
-                            alert('SFTP访问失败，但SSH连接仍然有效。文件管理功能可能受限。');
-
-                            // 简单地显示空目录，用户至少能看到提示
-                            this.displayRemoteFiles([], path);
-                        } else {
-                            throw new Error('无法访问远程文件系统');
-                        }
-                    } catch (cmdError) {
-                        console.error('执行SSH命令也失败:', cmdError);
-                        alert(`无法访问SFTP，可能是此服务器未启用SFTP功能或您没有足够权限。`);
-                    }
-                }
+                
                 // 检查是否是连接错误
-                else if (result.error && (result.error.includes('not connected') ||
+                if (result.error && (result.error.includes('not connected') ||
                     result.error.includes('connection closed') ||
                     result.error.includes('会话未找到'))) {
                     alert(`连接已断开，请重新连接服务器`);
@@ -350,7 +360,7 @@ class FileManager {
             parentRow.appendChild(nameCell);
 
             // 空列
-            for (let i = 0; i < 3; i++) {
+            for (let i = 0; i < 4; i++) {
                 const cell = document.createElement('td');
                 cell.textContent = '-';
                 parentRow.appendChild(cell);
@@ -386,9 +396,18 @@ class FileManager {
             dateCell.textContent = this.formatDate(file.modifyTime);
             row.appendChild(dateCell);
 
+            // 所有者列
+            const ownerCell = document.createElement('td');
+            ownerCell.textContent = file.owner || 'unknown';
+            ownerCell.classList.add('owner-cell');
+            row.appendChild(ownerCell);
+
             // 权限列
             const permCell = document.createElement('td');
             permCell.textContent = this.formatPermissions(file.permissions);
+            permCell.classList.add('permissions-cell');
+            permCell.style.cursor = 'pointer';
+            permCell.title = '点击修改权限';
             row.appendChild(permCell);
 
             fragment.appendChild(row);
@@ -408,11 +427,24 @@ class FileManager {
                 const name = row.dataset.name;
                 let newPath;
                 if (name === '..') {
-                    newPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+                    // 从DOM获取当前路径，而不是使用可能过期的currentPath变量
+                    const currentPath = document.getElementById('remote-path').value || '/';
+                    const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/'));
+                    newPath = parentPath === '' ? '/' : parentPath;
                 } else {
                     newPath = row.dataset.path.replace(/\/+/g, '/');
                 }
                 await this.loadRemoteFiles(newPath);
+            });
+
+            // 权限点击事件
+            tbody.addEventListener('click', (e) => {
+                if (e.target.classList.contains('permissions-cell')) {
+                    const row = e.target.closest('tr');
+                    if (!row || row.dataset.name === '..') return;
+                    
+                    this.showPermissionsDialog(row.dataset.path, e.target.textContent);
+                }
             });
         }
     }
@@ -989,6 +1021,317 @@ class FileManager {
                 }
             });
         }
+    }
+
+    // 显示权限修改对话框
+    showPermissionsDialog(filePath, currentPermissions) {
+        // 创建对话框 HTML
+        const dialogHtml = `
+            <div id="permissions-dialog" class="dialog active">
+                <div class="dialog-content permissions-dialog-content">
+                    <h3>修改文件权限 <code class="current-perm-badge">${currentPermissions}</code></h3>
+                    
+                    <div class="file-info">
+                        <div class="file-path">
+                            <span class="path-label">文件路径:</span>
+                            <span class="path-value">${filePath}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="permissions-editor">
+                        <div class="octal-input-section">
+                            <div class="input-with-preview">
+                                <label for="new-permissions">八进制权限</label>
+                                <input type="text" id="new-permissions" value="${this.parsePermissions(currentPermissions)}" placeholder="755" maxlength="3">
+                                <span class="preview-separator">=</span>
+                                <div class="preview-text" id="permissions-preview">rwxr-xr-x</div>
+                            </div>
+                            <div class="common-permissions">
+                                <span class="label">常用权限:</span>
+                                <button type="button" class="perm-preset" data-perm="755">755</button>
+                                <button type="button" class="perm-preset" data-perm="644">644</button>
+                                <button type="button" class="perm-preset" data-perm="777">777</button>
+                                <button type="button" class="perm-preset" data-perm="600">600</button>
+                            </div>
+                        </div>
+                        
+                        <div class="permissions-visual">
+                            <div class="permission-group">
+                                <div class="group-header">
+                                    <span>所有者</span>
+                                </div>
+                                <div class="permission-checkboxes">
+                                    <label class="checkbox-item read">
+                                        <input type="checkbox" id="owner-read">
+                                        <span class="checkmark"></span>
+                                        <span class="perm-label">读取</span>
+                                        <code>r</code>
+                                    </label>
+                                    <label class="checkbox-item write">
+                                        <input type="checkbox" id="owner-write">
+                                        <span class="checkmark"></span>
+                                        <span class="perm-label">写入</span>
+                                        <code>w</code>
+                                    </label>
+                                    <label class="checkbox-item exec">
+                                        <input type="checkbox" id="owner-exec">
+                                        <span class="checkmark"></span>
+                                        <span class="perm-label">执行</span>
+                                        <code>x</code>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <div class="permission-group">
+                                <div class="group-header">
+                                    <span>组</span>
+                                </div>
+                                <div class="permission-checkboxes">
+                                    <label class="checkbox-item read">
+                                        <input type="checkbox" id="group-read">
+                                        <span class="checkmark"></span>
+                                        <span class="perm-label">读取</span>
+                                        <code>r</code>
+                                    </label>
+                                    <label class="checkbox-item write">
+                                        <input type="checkbox" id="group-write">
+                                        <span class="checkmark"></span>
+                                        <span class="perm-label">写入</span>
+                                        <code>w</code>
+                                    </label>
+                                    <label class="checkbox-item exec">
+                                        <input type="checkbox" id="group-exec">
+                                        <span class="checkmark"></span>
+                                        <span class="perm-label">执行</span>
+                                        <code>x</code>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <div class="permission-group">
+                                <div class="group-header">
+                                    <span>其他用户</span>
+                                </div>
+                                <div class="permission-checkboxes">
+                                    <label class="checkbox-item read">
+                                        <input type="checkbox" id="other-read">
+                                        <span class="checkmark"></span>
+                                        <span class="perm-label">读取</span>
+                                        <code>r</code>
+                                    </label>
+                                    <label class="checkbox-item write">
+                                        <input type="checkbox" id="other-write">
+                                        <span class="checkmark"></span>
+                                        <span class="perm-label">写入</span>
+                                        <code>w</code>
+                                    </label>
+                                    <label class="checkbox-item exec">
+                                        <input type="checkbox" id="other-exec">
+                                        <span class="checkmark"></span>
+                                        <span class="perm-label">执行</span>
+                                        <code>x</code>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="dialog-buttons">
+                        <button type="button" id="cancel-permissions">取消</button>
+                        <button type="button" id="apply-permissions">应用更改</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // 移除现有对话框
+        const existingDialog = document.getElementById('permissions-dialog');
+        if (existingDialog) {
+            existingDialog.remove();
+        }
+
+        // 添加对话框到页面
+        document.body.insertAdjacentHTML('beforeend', dialogHtml);
+
+        // 设置初始权限状态
+        this.setPermissionCheckboxes(currentPermissions);
+
+        // 权限输入框变化事件
+        const permInput = document.getElementById('new-permissions');
+        permInput.addEventListener('input', () => {
+            this.updateCheckboxesFromOctal(permInput.value);
+            this.updatePermissionPreview(permInput.value);
+        });
+
+        // 复选框变化事件
+        const checkboxes = document.querySelectorAll('#permissions-dialog input[type="checkbox"]');
+        checkboxes.forEach(checkbox => {
+            checkbox.addEventListener('change', () => {
+                this.updateOctalFromCheckboxes();
+            });
+        });
+
+        // 常用权限预设按钮
+        const presetButtons = document.querySelectorAll('.perm-preset');
+        presetButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                const perm = button.dataset.perm;
+                permInput.value = perm;
+                this.updateCheckboxesFromOctal(perm);
+                this.updatePermissionPreview(perm);
+            });
+        });
+
+        // 按钮事件
+        document.getElementById('cancel-permissions').addEventListener('click', () => {
+            document.getElementById('permissions-dialog').remove();
+        });
+
+        document.getElementById('apply-permissions').addEventListener('click', () => {
+            this.applyPermissions(filePath, permInput.value);
+        });
+
+        // 初始化权限预览
+        this.updatePermissionPreview(permInput.value);
+    }
+
+
+    // 应用权限修改
+    async applyPermissions(filePath, permissions) {
+        if (!window.currentSessionId) {
+            alert('请先连接到服务器');
+            return;
+        }
+
+        // 调试：检查 currentSessionId 的类型
+        console.log('applyPermissions - currentSessionId:', window.currentSessionId, 'type:', typeof window.currentSessionId);
+
+        // 验证权限格式
+        if (!/^[0-7]{3}$/.test(permissions)) {
+            alert('权限格式错误，请输入3位八进制数字 (例如: 755)');
+            return;
+        }
+
+        try {
+            // 确保传递字符串类型的sessionId
+            const sessionId = String(window.currentSessionId);
+            const result = await window.api.file.changePermissions(
+                sessionId,
+                filePath,
+                permissions
+            );
+
+            if (result.success) {
+                // 关闭对话框
+                document.getElementById('permissions-dialog').remove();
+                
+                // 刷新文件列表
+                const currentPath = document.getElementById('remote-path').value || '/';
+                await this.loadRemoteFiles(currentPath);
+                
+                console.log('权限修改成功');
+            } else {
+                alert(`权限修改失败: ${result.error || '未知错误'}`);
+            }
+        } catch (error) {
+            console.error('权限修改失败:', error);
+            alert(`权限修改失败: ${error.message}`);
+        }
+    }
+
+    // 解析权限字符串为八进制
+    parsePermissions(permStr) {
+        if (permStr.length === 10) {
+            // 从 -rwxrwxrwx 格式解析
+            let octal = '';
+            for (let i = 1; i < 10; i += 3) {
+                let digit = 0;
+                if (permStr[i] === 'r') digit += 4;
+                if (permStr[i + 1] === 'w') digit += 2;
+                if (permStr[i + 2] === 'x') digit += 1;
+                octal += digit;
+            }
+            return octal;
+        }
+        return permStr;
+    }
+
+    // 设置权限复选框
+    setPermissionCheckboxes(permStr) {
+        const octal = this.parsePermissions(permStr);
+        this.updateCheckboxesFromOctal(octal);
+    }
+
+    // 根据八进制更新复选框
+    updateCheckboxesFromOctal(octal) {
+        if (!/^[0-7]{3}$/.test(octal)) return;
+
+        const perms = octal.split('').map(d => parseInt(d));
+        const groups = ['owner', 'group', 'other'];
+
+        groups.forEach((group, i) => {
+            const perm = perms[i];
+            document.getElementById(`${group}-read`).checked = !!(perm & 4);
+            document.getElementById(`${group}-write`).checked = !!(perm & 2);
+            document.getElementById(`${group}-exec`).checked = !!(perm & 1);
+        });
+    }
+
+    // 根据复选框更新八进制
+    updateOctalFromCheckboxes() {
+        const groups = ['owner', 'group', 'other'];
+        let octal = '';
+
+        groups.forEach(group => {
+            let digit = 0;
+            if (document.getElementById(`${group}-read`).checked) digit += 4;
+            if (document.getElementById(`${group}-write`).checked) digit += 2;
+            if (document.getElementById(`${group}-exec`).checked) digit += 1;
+            octal += digit;
+        });
+
+        document.getElementById('new-permissions').value = octal;
+        this.updatePermissionPreview(octal);
+    }
+
+    // 更新权限预览文本
+    updatePermissionPreview(octal) {
+        const preview = document.getElementById('permissions-preview');
+        if (!preview) return;
+
+        if (!/^[0-7]{3}$/.test(octal)) {
+            preview.textContent = 'Invalid';
+            preview.className = 'preview-text invalid';
+            return;
+        }
+
+        let permStr = '';
+        const digits = octal.split('').map(d => parseInt(d));
+
+        digits.forEach(digit => {
+            permStr += (digit & 4) ? 'r' : '-';
+            permStr += (digit & 2) ? 'w' : '-';
+            permStr += (digit & 1) ? 'x' : '-';
+        });
+
+        preview.textContent = permStr;
+        preview.className = 'preview-text valid';
+    }
+
+    // 八进制转换为可读权限字符串
+    octalToReadable(octal) {
+        if (!/^[0-7]{3}$/.test(octal)) return 'Invalid';
+        
+        let result = '';
+        const digits = octal.split('').map(d => parseInt(d));
+        
+        digits.forEach(digit => {
+            result += (digit & 4) ? 'r' : '-';
+            result += (digit & 2) ? 'w' : '-';
+            result += (digit & 1) ? 'x' : '-';
+        });
+        
+        return result;
     }
 }
 

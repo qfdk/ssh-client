@@ -56,6 +56,17 @@ contextBridge.exposeInMainWorld('api', {
             sessionId,
             remotePath,
             localPath
+        }),
+        changePermissions: (sessionId, remotePath, permissions) => ipcRenderer.invoke('file:change-permissions', {
+            sessionId,
+            remotePath,
+            permissions
+        }),
+        changeOwner: (sessionId, remotePath, owner, group) => ipcRenderer.invoke('file:change-owner', {
+            sessionId,
+            remotePath,
+            owner,
+            group
         })
     },
     config: {

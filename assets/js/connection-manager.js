@@ -513,11 +513,8 @@ class ConnectionManager {
                 });
                 this.updateActiveConnectionItem(connection.id);
 
-                // 更新连接列表
+                // 更新连接列表（已包含活跃状态更新）
                 await this.loadConnections();
-
-                // 更新活跃连接项状态
-                this.updateActiveConnectionItem(connection.id);
 
                 // 重置文件管理器状态
                 window.fileManager.fileManagerInitialized = false;
@@ -674,11 +671,8 @@ class ConnectionManager {
                     }
                 }, 50);
 
-                // 更新连接列表
+                // 更新连接列表（已包含活跃状态更新）
                 await this.loadConnections();
-
-                // 更新活跃连接项状态
-                this.updateActiveConnectionItem(generatedId);
 
                 // 重置文件管理器状态
                 window.fileManager.fileManagerInitialized = false;

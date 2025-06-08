@@ -156,6 +156,415 @@ function addCustomStyles() {
     }
     `;
 
+    // 权限对话框样式
+    const permissionsCSS = `
+    #permissions-dialog {
+        z-index: 10000;
+    }
+
+    #permissions-dialog .dialog-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(4px);
+    }
+
+    .permissions-dialog-content {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: white;
+        border-radius: 16px;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        max-width: 700px;
+        width: 90%;
+        max-height: 90vh;
+        overflow-y: auto;
+        padding: 0;
+        animation: dialogSlideIn 0.3s ease-out;
+    }
+
+    @keyframes dialogSlideIn {
+        from { 
+            opacity: 0; 
+            transform: translate(-50%, -45%) scale(0.95);
+        }
+        to { 
+            opacity: 1; 
+            transform: translate(-50%, -50%) scale(1);
+        }
+    }
+
+    .dialog-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 24px 28px 20px;
+        border-bottom: 1px solid #e5e7eb;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 16px 16px 0 0;
+    }
+
+    .dialog-header h3 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .close-btn {
+        background: rgba(255, 255, 255, 0.2);
+        border: none;
+        border-radius: 8px;
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: background-color 0.2s;
+        color: white;
+    }
+
+    .close-btn:hover {
+        background: rgba(255, 255, 255, 0.3);
+    }
+
+    .file-info {
+        padding: 20px 28px;
+        background: #f8fafc;
+        border-bottom: 1px solid #e5e7eb;
+    }
+
+    .file-path {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+        font-size: 14px;
+        color: #374151;
+    }
+
+    .file-path span {
+        font-family: monospace;
+        background: white;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid #d1d5db;
+        word-break: break-all;
+    }
+
+    .current-perms {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+    }
+
+    .current-perms .label {
+        color: #6b7280;
+        font-weight: 500;
+    }
+
+    .perm-code {
+        background: #1f2937;
+        color: #10b981;
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-family: monospace;
+        font-weight: 600;
+        font-size: 13px;
+    }
+    .octal-input-section {
+        margin-bottom: 16px;
+    }
+    .octal-input-section label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+        color: #374151;
+        font-size: 14px;
+    }
+
+    .input-with-preview {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+    }
+
+    #new-permissions {
+        font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+        font-size: 20px;
+        text-align: center;
+        font-weight: 700;
+        border: 2px solid #d1d5db;
+        border-radius: 10px;
+        width: 80px;
+        background: white;
+        transition: all 0.2s;
+    }
+
+    #new-permissions:focus {
+        outline: none;
+        border-color: #667eea;
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+
+    .preview-text {
+        font-family: monospace;
+        font-size: 16px;
+        font-weight: 600;
+        background: #f3f4f6;
+        border-radius: 8px;
+        min-width: 120px;
+        text-align: center;
+        transition: all 0.2s;
+    }
+
+    .preview-text.valid {
+        background: #dcfce7;
+        color: #166534;
+        border: 1px solid #bbf7d0;
+    }
+
+    .preview-text.invalid {
+        background: #fef2f2;
+        color: #dc2626;
+        border: 1px solid #fecaca;
+    }
+
+    .common-permissions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .common-permissions .label {
+        font-size: 13px;
+        color: #6b7280;
+        font-weight: 500;
+        margin-right: 4px;
+    }
+
+    .perm-preset {
+        background: #f3f4f6;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        padding: 6px 12px;
+        font-family: monospace;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        color: #374151;
+    }
+
+    .perm-preset:hover {
+        background: #667eea;
+        color: white;
+        border-color: #667eea;
+        transform: translateY(-1px);
+    }
+
+    .permissions-visual {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+        padding-top:16px;
+    }
+
+    .permission-group {
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 20px;
+        transition: all 0.2s;
+    }
+
+    .permission-group:hover {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        border-color: #d1d5db;
+    }
+
+    .group-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+        font-weight: 600;
+        color: #374151;
+        font-size: 14px;
+        padding-bottom: 8px;
+        border-bottom: 2px solid #f3f4f6;
+    }
+
+    .permission-checkboxes {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .checkbox-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        cursor: pointer;
+        padding: 8px 12px;
+        border-radius: 8px;
+        transition: all 0.2s;
+        position: relative;
+    }
+
+    .checkbox-item:hover {
+        background: #f8fafc;
+    }
+
+    .checkbox-item.read:hover { background: #fef2f2; }
+    .checkbox-item.write:hover { background: #fffbeb; }
+    .checkbox-item.exec:hover { background: #f0fdf4; }
+
+    .checkbox-item input[type="checkbox"] {
+        display: none;
+    }
+
+    .checkmark {
+        width: 20px;
+        height: 20px;
+        border: 2px solid #d1d5db;
+        border-radius: 6px;
+        position: relative;
+        transition: all 0.2s;
+        flex-shrink: 0;
+    }
+
+    .checkbox-item input[type="checkbox"]:checked + .checkmark {
+        background: #667eea;
+        border-color: #667eea;
+    }
+
+    .checkbox-item.read input[type="checkbox"]:checked + .checkmark {
+        background: #ef4444;
+        border-color: #ef4444;
+    }
+
+    .checkbox-item.write input[type="checkbox"]:checked + .checkmark {
+        background: #f59e0b;
+        border-color: #f59e0b;
+    }
+
+    .checkbox-item.exec input[type="checkbox"]:checked + .checkmark {
+        background: #10b981;
+        border-color: #10b981;
+    }
+
+    .checkmark::after {
+        content: "";
+        position: absolute;
+        display: none;
+        left: 6px;
+        top: 2px;
+        width: 6px;
+        height: 10px;
+        border: solid white;
+        border-width: 0 2px 2px 0;
+        transform: rotate(45deg);
+    }
+
+    .checkbox-item input[type="checkbox"]:checked + .checkmark::after {
+        display: block;
+    }
+
+    .perm-label {
+        font-size: 14px;
+        font-weight: 500;
+        color: #374151;
+        flex: 1;
+    }
+
+    .checkbox-item code {
+        background: #f3f4f6;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 12px;
+        font-weight: 600;
+        color: #6b7280;
+    }
+
+    .dialog-actions {
+        padding: 20px 28px 28px;
+        background: #f8fafc;
+        border-top: 1px solid #e5e7eb;
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+        border-radius: 0 0 16px 16px;
+    }
+
+    .btn {
+        padding: 10px 20px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 14px;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        border: none;
+    }
+
+    .btn-secondary {
+        background: white;
+        color: #374151;
+        border: 1px solid #d1d5db;
+    }
+
+    .btn-secondary:hover {
+        background: #f9fafb;
+        border-color: #9ca3af;
+    }
+
+    .btn-primary {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: 1px solid transparent;
+    }
+
+    .btn-primary:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+
+    .permissions-cell {
+        font-family: monospace;
+        padding: 4px 8px;
+        border-radius: 4px;
+        transition: all 0.2s;
+    }
+
+    .permissions-cell:hover {
+        transform: translateY(-1px);
+    }
+
+    .owner-cell {
+        color: #6b7280;
+        font-weight: 600;
+        background: #f8fafc;
+        padding: 4px 8px;
+        border-radius: 4px;
+    }
+    `;
+
     // 额外CSS修复
     const extraCSS = `
     /* Fix xterm sizing */
@@ -248,7 +657,7 @@ function addCustomStyles() {
         border-color: transparent #333 transparent transparent;
     }
     `;
-    
+
     // 添加所有样式
     const customStyle = document.createElement('style');
     customStyle.textContent = `
@@ -263,6 +672,7 @@ function addCustomStyles() {
       
       ${terminalCSS}
       ${menuCSS}
+      ${permissionsCSS}
       ${extraCSS}
       ${tooltipCSS}
     `;
@@ -272,10 +682,10 @@ function addCustomStyles() {
 // 初始化应用程序
 function initializeApp() {
     console.log('应用初始化开始');
-    
+
     // 添加自定义样式
     addCustomStyles();
-    
+
     // 设置全局变量和引用，使模块能够相互访问
     window.sessionManager = sessionManager;
     window.terminalManager = terminalManager;
@@ -284,30 +694,30 @@ function initializeApp() {
     window.uiManager = uiManager;
     window.activeTabId = 'terminal';  // 默认活动标签
     window.currentSessionId = null;   // 当前会话ID
-    
+
     // 初始化UI事件监听
     uiManager.initUIEvents();
-    
+
     // 设置路径输入框的回车键处理
     uiManager.setupEnterKeyHandler('remote-path', path => fileManager.loadRemoteFiles(path));
     uiManager.setupEnterKeyHandler('local-path', path => fileManager.loadLocalFiles(path));
-    
+
     // 设置文件传输监听
     fileManager.setupFileTransferListeners();
-    
+
     // 设置SSH数据处理和连接关闭处理
     connectionManager.setupSSHHandlers();
-    
+
     // 加载连接列表
     connectionManager.loadConnections();
-    
+
     // 设置连接更新监听
     if (window.api && window.api.config && window.api.config.onConnectionsUpdated) {
         window.api.config.onConnectionsUpdated(() => {
             connectionManager.loadConnections();
         });
     }
-    
+
     // 下载进度监听
     if (window.api && window.api.file) {
         window.api.file.onDownloadProgress((event, progressData) => {
@@ -340,7 +750,7 @@ function initializeApp() {
             }
         });
     }
-    
+
     // 添加连接项点击事件委托
     document.addEventListener('click', async function (event) {
         // 编辑连接按钮
@@ -352,7 +762,7 @@ function initializeApp() {
                 if (window.api && window.api.config) {
                     const connections = await window.api.config.getConnections();
                     const connection = connections.find(c => c.id === id);
-                    
+
                     if (connection) {
                         // 填充编辑表单并显示对话框
                         connectionManager.showEditConnectionDialog(connection);
@@ -388,13 +798,13 @@ function initializeApp() {
             return;
         }
     });
-    
+
     // 初始化终端占位符
     const placeholder = document.getElementById('terminal-placeholder');
     if (placeholder) {
         placeholder.classList.remove('hidden');
     }
-    
+
     console.log('应用初始化完成');
 }
 
