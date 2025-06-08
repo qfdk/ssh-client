@@ -3,7 +3,6 @@ const path = require('path');
 const ejs = require('ejs');
 const fs = require('fs');
 const os = require('os');
-const { spawn } = require('child_process');
 
 // 惰性加载服务 - 仅在需要时才加载模块
 let _sshService = null;
@@ -118,8 +117,6 @@ function createWindow() {
         }
     });
 
-    // 打开开发者工具帮助调试
-    // mainWindow.webContents.openDevTools();
 }
 
 /**
@@ -176,17 +173,10 @@ function handleSshData(sessionId, data) {
         // 确保data是字符串格式
         const dataStr = typeof data === 'string' ? data : data.toString('utf8');
 
-        // 增加数据标识，帮助调试
-        const timestamp = Date.now();
-        const shortId = `${timestamp % 10000}`;
-
-        console.log(`[${shortId}] 向渲染进程发送数据，会话ID: ${sessionId}, 数据长度: ${dataStr.length}`);
-
+        // 直接发送数据，减少元数据开销
         mainWindow.webContents.send('ssh:data', {
             sessionId,
-            data: dataStr,
-            timestamp,
-            id: shortId
+            data: dataStr
         });
     } catch (error) {
         console.error('处理SSH数据时出错:', error);
@@ -552,35 +542,6 @@ const sshOperationHandlers = {
         return await getSshService().getSessionBuffer(sessionId);
     }),
     
-    // 替代连接方法
-    'ssh:connect-alternative': createIpcHandler(async (event, connectionDetails) => {
-        // 使用系统级网络命令测试连接
-        console.log(`尝试连接: ${connectionDetails.host}`);
-
-        // 首先测试端口是否可达
-        return new Promise((resolve) => {
-            // 使用底层系统网络操作代替 Node.js 网络 API
-            const process = spawn('nc', ['-G', '5', '-z', connectionDetails.host, connectionDetails.port || '22']);
-
-            process.on('close', (code) => {
-                const portOpen = code === 0;
-
-                if (portOpen) {
-                    // 端口可达，正常进行 SSH 连接
-                    getSshService().connect(connectionDetails)
-                        .then(result => resolve(result))
-                        .catch(err => resolve({success: false, error: err.message}));
-                } else {
-                    // 如果系统级网络测试失败，尝试用备用方法
-                    resolve({
-                        success: false,
-                        error: `网络连接不可达: ${connectionDetails.host}:${connectionDetails.port || 22}`,
-                        needsAlternativeMethod: true
-                    });
-                }
-            });
-        });
-    })
 };
 
 // 注册所有IPC处理程序

@@ -1,10 +1,46 @@
 // file-manager.js
 // 文件管理器相关功能
 
+// LRU缓存实现
+class LRUCache {
+    constructor(maxSize = 50) {
+        this.maxSize = maxSize;
+        this.cache = new Map();
+    }
+    
+    get(key) {
+        if (this.cache.has(key)) {
+            const value = this.cache.get(key);
+            this.cache.delete(key);
+            this.cache.set(key, value); // 移到最后
+            return value;
+        }
+        return null;
+    }
+    
+    set(key, value) {
+        if (this.cache.has(key)) {
+            this.cache.delete(key);
+        } else if (this.cache.size >= this.maxSize) {
+            const firstKey = this.cache.keys().next().value;
+            this.cache.delete(firstKey);
+        }
+        this.cache.set(key, value);
+    }
+    
+    has(key) {
+        return this.cache.has(key);
+    }
+    
+    clear() {
+        this.cache.clear();
+    }
+}
+
 class FileManager {
     constructor() {
-        this.remoteFileCache = new Map(); // 远程文件缓存
-        this.localFileCache = new Map(); // 本地文件缓存
+        this.remoteFileCache = new LRUCache(30); // 远程文件缓存
+        this.localFileCache = new LRUCache(30); // 本地文件缓存
         this.lastLocalDirectory = null; // 记住上次的本地目录
         this.fileManagerInitialized = false; // 文件管理器是否已初始化
         
@@ -19,7 +55,7 @@ class FileManager {
                 } else {
                     return dir + '/' + file;
                 }
-            }
+            },
         };
     }
     
@@ -298,12 +334,15 @@ class FileManager {
         const tbody = document.querySelector('#remote-files tbody');
         if (!tbody) return;
 
-        tbody.innerHTML = '';
+        // 使用DocumentFragment批量插入，避免多次重排
+        const fragment = document.createDocumentFragment();
 
         // 添加返回上级目录的条目
         if (currentPath !== '/') {
             const parentRow = document.createElement('tr');
             parentRow.className = 'directory';
+            parentRow.dataset.type = 'directory';
+            parentRow.dataset.name = '..';
 
             // 文件名列
             const nameCell = document.createElement('td');
@@ -317,17 +356,16 @@ class FileManager {
                 parentRow.appendChild(cell);
             }
 
-            parentRow.addEventListener('dblclick', async () => {
-                const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
-                await this.loadRemoteFiles(parentPath);
-            });
-
-            tbody.appendChild(parentRow);
+            fragment.appendChild(parentRow);
         }
 
+        // 批量创建行
         files.forEach(file => {
             const row = document.createElement('tr');
             row.className = file.isDirectory ? 'directory' : 'file';
+            row.dataset.type = file.isDirectory ? 'directory' : 'file';
+            row.dataset.name = file.name;
+            row.dataset.path = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
 
             // 文件名列
             const nameCell = document.createElement('td');
@@ -353,22 +391,30 @@ class FileManager {
             permCell.textContent = this.formatPermissions(file.permissions);
             row.appendChild(permCell);
 
-            // 添加行点击事件
-            if (file.isDirectory) {
-                row.addEventListener('dblclick', async () => {
-                    let newPath;
-                    if (file.name === '..') {
-                        newPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
-                    } else {
-                        newPath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
-                        newPath = newPath.replace(/\/+/g, '/');
-                    }
-                    await this.loadRemoteFiles(newPath);
-                });
-            }
-
-            tbody.appendChild(row);
+            fragment.appendChild(row);
         });
+
+        // 清空并一次性插入所有行
+        tbody.innerHTML = '';
+        tbody.appendChild(fragment);
+
+        // 使用事件委托处理所有行的点击事件
+        if (!tbody.dataset.delegated) {
+            tbody.dataset.delegated = 'true';
+            tbody.addEventListener('dblclick', async (e) => {
+                const row = e.target.closest('tr');
+                if (!row || row.dataset.type !== 'directory') return;
+
+                const name = row.dataset.name;
+                let newPath;
+                if (name === '..') {
+                    newPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+                } else {
+                    newPath = row.dataset.path.replace(/\/+/g, '/');
+                }
+                await this.loadRemoteFiles(newPath);
+            });
+        }
     }
     
     // 上传文件

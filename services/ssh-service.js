@@ -221,6 +221,7 @@ class SshService extends EventEmitter {
         });
     }
 
+
     /**
      * 创建shell会话
      * @param {string} sessionId - 会话ID
@@ -252,18 +253,67 @@ class SshService extends EventEmitter {
      * @private
      */
     setupStreamHandlers(sessionId, stream) {
+        // 创建数据批处理器
+        const createBatchProcessor = () => {
+            let pendingData = '';
+            let batchTimer = null;
+            const BATCH_DELAY = 16; // 约60fps的更新频率
+            const MAX_BATCH_SIZE = 8192; // 8KB最大批处理大小
+            
+            return (data) => {
+                pendingData += data;
+                
+                // 如果数据量大，立即发送
+                if (pendingData.length >= MAX_BATCH_SIZE) {
+                    if (batchTimer) {
+                        clearTimeout(batchTimer);
+                        batchTimer = null;
+                    }
+                    const dataToSend = pendingData;
+                    pendingData = '';
+                    return dataToSend;
+                }
+                
+                // 否则批量处理
+                if (!batchTimer) {
+                    batchTimer = setTimeout(() => {
+                        batchTimer = null;
+                        if (pendingData) {
+                            const dataToSend = pendingData;
+                            pendingData = '';
+                            const session = this.sessions.get(sessionId);
+                            if (session && session.active) {
+                                this.emit('data', sessionId, dataToSend);
+                            }
+                        }
+                    }, BATCH_DELAY);
+                }
+                
+                return null;
+            };
+        };
+        
+        const batchProcessor = createBatchProcessor();
+        
         // 处理数据事件
         stream.on('data', (data) => {
             const dataStr = data.toString('utf8');
             const session = this.sessions.get(sessionId);
             if (session) {
-                // 追加到缓冲区
+                // 追加到缓冲区（限制大小）
+                const MAX_BUFFER_SIZE = 102400; // 100KB
                 session.buffer = (session.buffer || '') + dataStr;
+                if (session.buffer.length > MAX_BUFFER_SIZE) {
+                    session.buffer = session.buffer.slice(-MAX_BUFFER_SIZE);
+                }
                 this.sessions.set(sessionId, session);
 
                 // 只有活跃会话才发送数据
                 if (session.active) {
-                    this.emit('data', sessionId, dataStr);
+                    const batchedData = batchProcessor(dataStr);
+                    if (batchedData) {
+                        this.emit('data', sessionId, batchedData);
+                    }
                 }
             }
         });
@@ -274,6 +324,9 @@ class SshService extends EventEmitter {
             const session = this.sessions.get(sessionId);
             if (session) {
                 session.buffer = (session.buffer || '') + dataStr;
+                if (session.buffer.length > 102400) {
+                    session.buffer = session.buffer.slice(-102400);
+                }
                 this.sessions.set(sessionId, session);
 
                 if (session.active) {
@@ -466,25 +519,6 @@ class SshService extends EventEmitter {
         
         if (!session) {
             console.error(`[${operationName}] 会话 ${sessionId} 未找到`);
-            // 尝试通过连接ID查找
-            for (const [connId, sessId] of this.connectionToSession.entries()) {
-                if (sessId === sessionId) {
-                    console.log(`[${operationName}] 尝试通过连接ID ${connId} 重新激活会话`);
-                    try {
-                        const result = await this.activateSession(sessionId);
-                        if (result.success) {
-                            return { 
-                                success: true, 
-                                session: this.sessions.get(result.sessionId), 
-                                sessionId: result.sessionId 
-                            };
-                        }
-                    } catch (err) {
-                        console.error(`[${operationName}] 尝试重新激活会话失败:`, err);
-                    }
-                    break;
-                }
-            }
             return { success: false, error: '会话未找到' };
         }
 
@@ -767,7 +801,24 @@ class SshService extends EventEmitter {
                     return;
                 }
 
-                sftp.fastPut(localPath, remotePath, (err) => {
+                // 使用选项优化传输性能
+                const transferOptions = {
+                    concurrency: 64, // 增加并发数
+                    chunkSize: 32768, // 32KB chunks
+                    step: (total_transferred, chunk, total) => {
+                        // 发送进度事件
+                        const progress = Math.round((total_transferred / total) * 100);
+                        this.emit('transfer-progress', sessionId, {
+                            type: 'upload',
+                            path: remotePath,
+                            progress,
+                            transferred: total_transferred,
+                            total
+                        });
+                    }
+                };
+                
+                sftp.fastPut(localPath, remotePath, transferOptions, (err) => {
                     if (err) {
                         reject(err);
                         return;

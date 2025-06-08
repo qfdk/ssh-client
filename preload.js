@@ -21,7 +21,6 @@ contextBridge.exposeInMainWorld('api', {
             ipcRenderer.on('ssh:closed', listener);
             return () => ipcRenderer.removeListener('ssh:closed', listener);
         },
-        connectAlternative: (connectionDetails) => ipcRenderer.invoke('ssh:connect-alternative', connectionDetails)
     },
     file: {
         list: (sessionId, path) => ipcRenderer.invoke('file:list', {sessionId, path}),

@@ -86,8 +86,6 @@ class SessionManager {
         } else {
             console.warn(`[sessionManager] 尝试设置不存在的会话 ${sessionId} 的活跃状态`);
         }
-        // 输出当前所有会话状态
-        this.dumpSessions();
     }
 
     // 记录终端数据到缓冲区
@@ -115,19 +113,6 @@ class SessionManager {
         }
     }
     
-    // 去除缓冲区重复数据
-    deduplicateBuffer(sessionId) {
-        if (this.sessions.has(sessionId)) {
-            const session = this.sessions.get(sessionId);
-            if (session.buffer) {
-                // 简单去重：保留最新的50%内容
-                const halfLength = Math.floor(session.buffer.length / 2);
-                session.buffer = session.buffer.substring(halfLength);
-                this.sessions.set(sessionId, session);
-                console.log(`[sessionManager] 已去重会话 ${sessionId} 的缓冲区, 新长度: ${session.buffer.length}`);
-            }
-        }
-    }
     
     // 清除缓冲区
     clearBuffer(sessionId) {
@@ -156,13 +141,6 @@ class SessionManager {
         }
     }
 
-    // 调试: 输出所有会话状态
-    dumpSessions() {
-        console.log('当前会话状态:');
-        for (const [sessionId, session] of this.sessions.entries()) {
-            console.log(`- 会话ID: ${sessionId}, 连接ID: ${session.connectionId}, 活跃: ${session.active}`);
-        }
-    }
 }
 
 // 导出单例实例

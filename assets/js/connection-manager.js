@@ -72,19 +72,24 @@ class ConnectionManager {
     }
     
     // 更新活跃连接项
-    updateActiveConnectionItem(connectionId) {
-        // 重置所有连接项状态
-        document.querySelectorAll('.connection-item').forEach(item => {
+    updateActiveConnectionItem(activeConnectionId) {
+        console.log(`[updateActiveConnectionItem] 更新活跃连接指示器，当前活跃连接: ${activeConnectionId}, 当前会话: ${window.currentSessionId}`);
+        
+        // 获取所有连接项
+        const connectionItems = document.querySelectorAll('.connection-item');
+        
+        connectionItems.forEach(item => {
             const itemConnectionId = item.getAttribute('data-id');
-            const sessionInfo = window.sessionManager.getSessionByConnectionId(itemConnectionId);
-
-            // 检查是否有会话，以及是否为当前会话
-            const isActive = sessionInfo !== null && sessionInfo.sessionId === window.currentSessionId;
-
-            item.setAttribute('data-active', isActive ? 'true' : 'false');
+            // 只有传入的activeConnectionId才应该显示为活跃
+            const shouldBeActive = itemConnectionId === activeConnectionId;
+            
+            // 更新data-active属性
+            item.setAttribute('data-active', shouldBeActive ? 'true' : 'false');
+            
+            // 更新指示器样式
             const indicator = item.querySelector('.connection-status-indicator');
             if (indicator) {
-                if (isActive) {
+                if (shouldBeActive) {
                     indicator.classList.remove('offline');
                     indicator.classList.add('online');
                 } else {
@@ -92,31 +97,36 @@ class ConnectionManager {
                     indicator.classList.add('offline');
                 }
             }
+            
+            console.log(`[updateActiveConnectionItem] 连接 ${itemConnectionId}: ${shouldBeActive ? '活跃' : '非活跃'}`);
         });
-
-        // 确保当前连接项被正确标记
-        const activeItem = document.querySelector(`.connection-item[data-id="${connectionId}"]`);
-        if (activeItem) {
-            activeItem.setAttribute('data-active', 'true');
-            const indicator = activeItem.querySelector('.connection-status-indicator');
-            if (indicator) {
-                indicator.classList.remove('offline');
-                indicator.classList.add('online');
-            }
-        }
     }
+    
     
     // 切换到现有会话
     async switchToSession(connectionId) {
         console.log(`[switchToSession] 开始切换到连接ID: ${connectionId} 的会话`);
 
+        // 获取会话信息
+        const sessionInfo = window.sessionManager.getSessionByConnectionId(connectionId);
+        
+        // 如果是当前会话，直接返回
+        if (sessionInfo && window.currentSessionId === sessionInfo.sessionId) {
+            console.log(`[switchToSession] 已经在使用这个会话，无需切换`);
+            return true;
+        }
+
         // 清除文件管理器缓存
         window.fileManager.clearFileManagerCache();
 
-        // 立即清空终端容器，减少切换时看到旧内容
+        // 保存当前终端状态而不是清空
         const terminalContainer = document.getElementById('terminal-container');
-        if (terminalContainer) {
-            terminalContainer.innerHTML = '';
+        if (terminalContainer && window.currentSessionId) {
+            const currentTerminal = terminalContainer.firstChild;
+            if (currentTerminal) {
+                currentTerminal.style.display = 'none';
+                currentTerminal.dataset.sessionId = window.currentSessionId;
+            }
         }
         
         // 创建加载指示器
@@ -316,6 +326,11 @@ class ConnectionManager {
 
             // 确保终端大小正确，但使用延迟调整避免高CPU使用
             setTimeout(() => window.terminalManager.resizeTerminal(), 150);
+
+            // 最后更新活跃连接指示器，确保所有状态都已更新
+            setTimeout(() => {
+                this.updateActiveConnectionItem(connectionId);
+            }, 200);
 
             return true;
         } catch (error) {

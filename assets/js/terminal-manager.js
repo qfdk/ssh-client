@@ -1,6 +1,19 @@
 // terminal-manager.js
 // 专门处理终端相关功能
 
+// 防抖函数
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
 class TerminalManager {
     constructor() {
         this.activeTerminal = null;
@@ -8,6 +21,28 @@ class TerminalManager {
         this.currentTerminalDataHandler = null;
         this.currentTerminalDataHandlerDisposer = null;
         this.isTabSwitching = false;
+        
+        // 防抖的resize函数
+        this.resizeTerminal = debounce(() => {
+            if (this.terminalFitAddon && this.activeTerminal && window.currentSessionId) {
+                try {
+                    this.terminalFitAddon.fit();
+                    
+                    const dimensions = this.terminalFitAddon.proposeDimensions();
+                    if (dimensions && dimensions.cols && dimensions.rows) {
+                        window.api.ssh.resize(window.currentSessionId, dimensions.cols, dimensions.rows)
+                            .catch(err => {
+                                // 只记录非会话相关的错误，避免切换会话时的噪音
+                                if (!err.message || !err.message.includes('会话未找到')) {
+                                    console.error('调整终端大小失败:', err);
+                                }
+                            });
+                    }
+                } catch (err) {
+                    console.error('调整终端大小失败:', err);
+                }
+            }
+        }, 100);
     }
     
     // 创建终端实例
@@ -406,13 +441,7 @@ class TerminalManager {
     
         // 只在需要时调整大小（不是在标签切换期间）
         if (this.terminalFitAddon && !this.isTabSwitching) {
-            setTimeout(() => {
-                try {
-                    this.terminalFitAddon.fit();
-                } catch (err) {
-                    console.warn('调整终端大小失败:', err);
-                }
-            }, 100);
+            this.resizeTerminal();
         }
     
         // 只在不是标签切换期间聚焦
@@ -436,7 +465,12 @@ class TerminalManager {
             const dimensions = this.terminalFitAddon.proposeDimensions();
             if (dimensions && window.api && window.api.ssh) {
                 window.api.ssh.resize(window.currentSessionId, dimensions.cols, dimensions.rows)
-                    .catch(err => console.error('调整终端大小失败:', err));
+                    .catch(err => {
+                        // 只记录非会话相关的错误，避免切换会话时的噪音
+                        if (!err.message || !err.message.includes('会话未找到')) {
+                            console.error('调整终端大小失败:', err);
+                        }
+                    });
             }
         }
     }
