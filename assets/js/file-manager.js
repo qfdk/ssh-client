@@ -195,17 +195,40 @@ class FileManager {
                 throw new Error('会话已失效，请重新连接');
             }
 
-            // 发起请求
+            // 检查缓存,立即显示缓存内容
+            const cacheKey = `${sessionId}:${path}`;
+            const cachedFiles = this.remoteFileCache.get(cacheKey);
+            if (cachedFiles) {
+                console.log('使用缓存的远程文件列表:', cacheKey);
+                this.displayRemoteFiles(cachedFiles, path);
+                // 继续后台刷新,但不再显示加载状态
+                window.uiManager.showFileManagerLoading(false);
+            }
+
+            // 发起请求(即使有缓存也在后台刷新)
+            const currentPath = path; // 保存当前路径
             const result = await window.api.file.list(sessionId, path);
 
             if (result.success) {
+                // 检查路径是否仍然匹配(防止陈旧响应覆盖最新UI)
+                const currentRemotePath = window.sessionManager.getSession(sessionId)?.remotePath;
+                if (currentRemotePath !== currentPath) {
+                    console.log('路径已变更,跳过过期响应:', currentPath, '→', currentRemotePath);
+                    return;
+                }
+
                 // 更新缓存
                 const cacheKey = `${sessionId}:${path}`;
                 this.remoteFileCache.set(cacheKey, result.files);
                 console.log('更新远程文件缓存:', cacheKey);
 
-                // 显示文件
-                this.displayRemoteFiles(result.files, path);
+                // 只有在没有使用缓存时才显示文件(避免重复渲染)
+                if (!cachedFiles) {
+                    this.displayRemoteFiles(result.files, path);
+                } else {
+                    // 如果使用了缓存,静默更新(下次访问时生效)
+                    console.log('后台更新缓存成功,下次访问时生效');
+                }
             } else {
                 console.error('获取远程文件失败:', result.error);
                 

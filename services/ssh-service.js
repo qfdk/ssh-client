@@ -17,7 +17,8 @@ class SshService extends EventEmitter {
         this.execStatus = new Map(); // 存储连接的exec可用性状态
         this.commandQueue = new Map(); // 存储每个连接的命令队列
         this.fileManagerSessions = new Map(); // 存储连接到文件管理会话的映射
-        
+        this.userInfoCache = new Map(); // 存储UID/GID到用户名/组名的映射缓存
+
         // 设置定期清理过期连接
         setInterval(() => this.cleanExpiredConnections(), 30000); // 每30秒清理一次
     }
@@ -38,6 +39,7 @@ class SshService extends EventEmitter {
                 }
                 this.connectionPool.delete(key);
                 this.sftpStatus.delete(key); // 同时清理SFTP状态
+                this.userInfoCache.delete(key); // 清理用户信息缓存
                 this.execStatus.delete(key); // 同时清理exec状态
                 this.fileManagerSessions.delete(key); // 同时清理文件管理会话映射
             }
@@ -1081,36 +1083,23 @@ class SshService extends EventEmitter {
                     }
 
                     try {
-                        // 获取详细文件信息包括所有者
-                        const detailedList = await Promise.all(list.map(async (item) => {
+                        // 直接使用 readdir 返回的 attrs,避免重复 stat
+                        const detailedList = list.map((item) => {
                             const itemPath = remotePath === '/' ? `/${item.filename}` : `${remotePath}/${item.filename}`;
-                            
-                            return new Promise((resolveItem) => {
-                                sftp.stat(itemPath, (statErr, stats) => {
-                                    const fileInfo = {
-                                        name: item.filename,
-                                        fullPath: itemPath,
-                                        isDirectory: item.attrs.isDirectory(),
-                                        size: item.attrs.size,
-                                        modifyTime: new Date(item.attrs.mtime * 1000),
-                                        permissions: item.attrs.mode,
-                                        uid: item.attrs.uid,
-                                        gid: item.attrs.gid,
-                                        owner: 'unknown',
-                                        group: 'unknown'
-                                    };
-                                    
-                                    // 如果 stat 成功，使用更详细的信息
-                                    if (!statErr && stats) {
-                                        fileInfo.uid = stats.uid;
-                                        fileInfo.gid = stats.gid;
-                                        fileInfo.permissions = stats.mode;
-                                    }
-                                    
-                                    resolveItem(fileInfo);
-                                });
-                            });
-                        }));
+
+                            return {
+                                name: item.filename,
+                                fullPath: itemPath,
+                                isDirectory: item.attrs.isDirectory(),
+                                size: item.attrs.size,
+                                modifyTime: new Date(item.attrs.mtime * 1000),
+                                permissions: item.attrs.mode,
+                                uid: item.attrs.uid,
+                                gid: item.attrs.gid,
+                                owner: 'unknown',
+                                group: 'unknown'
+                            };
+                        });
 
                         // 尝试获取用户名和组名
                         this.enrichWithUserInfo(fileSessionId, detailedList)
@@ -1414,15 +1403,45 @@ class SshService extends EventEmitter {
      */
     async enrichWithUserInfo(sessionId, fileList) {
         try {
+            const session = this.sessions.get(sessionId);
+            if (!session) {
+                return fileList;
+            }
+
+            const connectionKey = session.connectionKey;
+
+            // 配置选项: 设置为 false 可跳过用户名/组名查询,直接显示 UID/GID
+            // 这可以显著提升高延迟链路的性能
+            const ENABLE_USER_GROUP_LOOKUP = true;
+
+            if (!ENABLE_USER_GROUP_LOOKUP) {
+                return fileList.map(file => ({
+                    ...file,
+                    owner: file.uid?.toString() || 'unknown',
+                    group: file.gid?.toString() || 'unknown'
+                }));
+            }
+
+            // 初始化该连接的缓存
+            if (!this.userInfoCache.has(connectionKey)) {
+                this.userInfoCache.set(connectionKey, {
+                    users: new Map(),
+                    groups: new Map()
+                });
+            }
+
+            const cache = this.userInfoCache.get(connectionKey);
+
             // 获取所有唯一的 UID 和 GID
             const uids = [...new Set(fileList.map(f => f.uid).filter(uid => uid !== undefined))];
             const gids = [...new Set(fileList.map(f => f.gid).filter(gid => gid !== undefined))];
-            
-            const userMap = new Map();
-            const groupMap = new Map();
-            
-            // 尝试获取用户和组信息，但如果失败就使用UID/GID
-            const session = this.sessions.get(sessionId);
+
+            // 分离已缓存和未缓存的
+            const uncachedUids = uids.filter(uid => !cache.users.has(uid));
+            const uncachedGids = gids.filter(gid => !cache.groups.has(gid));
+
+            const userMap = new Map(cache.users);
+            const groupMap = new Map(cache.groups);
             
             // 如果是文件管理会话且exec已知不可用，或者任何会话的exec状态为false，直接使用用户终端会话
             if (session && (
@@ -1448,31 +1467,37 @@ class SshService extends EventEmitter {
                 }));
             }
             
-            // 批量获取用户名 (原有逻辑)
-            if (uids.length > 0) {
+            // 只获取未缓存的用户名
+            if (uncachedUids.length > 0) {
                 try {
-                    const userResult = await this.executeFileCommand(sessionId, `getent passwd ${uids.join(' ')} 2>/dev/null || true`);
+                    const userResult = await this.executeFileCommand(sessionId, `getent passwd ${uncachedUids.join(' ')} 2>/dev/null || true`);
                     const userLines = userResult.split('\n').filter(line => line.trim());
                     userLines.forEach(line => {
                         const parts = line.split(':');
                         if (parts.length >= 3) {
-                            userMap.set(parseInt(parts[2]), parts[0]);
+                            const uid = parseInt(parts[2]);
+                            const username = parts[0];
+                            userMap.set(uid, username);
+                            cache.users.set(uid, username); // 更新缓存
                         }
                     });
                 } catch (err) {
                     console.warn('获取用户信息失败:', err.message);
                 }
             }
-            
-            // 批量获取组名 (原有逻辑)
-            if (gids.length > 0) {
+
+            // 只获取未缓存的组名
+            if (uncachedGids.length > 0) {
                 try {
-                    const groupResult = await this.executeFileCommand(sessionId, `getent group ${gids.join(' ')} 2>/dev/null || true`);
+                    const groupResult = await this.executeFileCommand(sessionId, `getent group ${uncachedGids.join(' ')} 2>/dev/null || true`);
                     const groupLines = groupResult.split('\n').filter(line => line.trim());
                     groupLines.forEach(line => {
                         const parts = line.split(':');
                         if (parts.length >= 3) {
-                            groupMap.set(parseInt(parts[2]), parts[0]);
+                            const gid = parseInt(parts[2]);
+                            const groupname = parts[0];
+                            groupMap.set(gid, groupname);
+                            cache.groups.set(gid, groupname); // 更新缓存
                         }
                     });
                 } catch (err) {
