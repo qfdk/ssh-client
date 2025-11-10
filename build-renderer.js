@@ -27,7 +27,8 @@ ejs.renderFile(
     {
         title: 'SSHL客户端',
         connections: [], // 空数组,由渲染进程通过IPC获取
-        basePath: __dirname
+        basePath: __dirname,
+        rendererScript: 'app://dist/assets/js/renderer.js' // 生产环境使用打包后的bundle
     },
     { root: viewsDir },
     (err, html) => {
@@ -36,18 +37,11 @@ ejs.renderFile(
             process.exit(1);
         }
 
-        // 替换脚本引用为打包后的bundle
-        // 注意: 这需要在 vite build 之后运行
-        const modifiedHtml = html.replace(
-            '<script type="module" src="app://assets/js/index.js"></script>',
-            '<script type="module" src="app://dist/assets/js/renderer.js"></script>'
-        );
-
         // 将HTML写入dist目录
         const outputPath = path.join(distDir, 'index.html');
-        fs.writeFileSync(outputPath, modifiedHtml);
+        fs.writeFileSync(outputPath, html);
 
         console.log(`✓ HTML已生成: ${outputPath}`);
-        console.log('✓ 脚本引用已更新为: app://dist/assets/js/renderer.js');
+        console.log('✓ 脚本引用: app://dist/assets/js/renderer.js');
     }
 );

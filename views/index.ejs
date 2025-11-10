@@ -57,6 +57,6 @@
 <%- include('partials/connection-dialog') %>
 
 <!-- Load the modular JS files through the index entry point -->
-<script type="module" src="app://assets/js/index.js"></script>
+<script type="module" src="<%= rendererScript || 'app://assets/js/index.js' %>"></script>
 </body>
 </html>

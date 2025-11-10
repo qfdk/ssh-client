@@ -134,7 +134,8 @@ function renderAndLoadInterface() {
         {
             title: 'SSHL客户端',
             connections: [], // 空数组,由渲染进程通过IPC获取
-            basePath: __dirname
+            basePath: __dirname,
+            rendererScript: undefined // 开发模式使用默认值(index.js)
         },
         {root: path.join(__dirname, 'views')},
         (err, html) => {

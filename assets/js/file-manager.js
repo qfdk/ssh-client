@@ -31,7 +31,11 @@ class LRUCache {
     has(key) {
         return this.cache.has(key);
     }
-    
+
+    delete(key) {
+        return this.cache.delete(key);
+    }
+
     clear() {
         this.cache.clear();
     }
@@ -211,7 +215,7 @@ class FileManager {
 
             if (result.success) {
                 // 检查路径是否仍然匹配(防止陈旧响应覆盖最新UI)
-                const currentRemotePath = window.sessionManager.getSession(sessionId)?.remotePath;
+                const currentRemotePath = window.sessionManager.getRemotePath(sessionId);
                 if (currentRemotePath !== currentPath) {
                     console.log('路径已变更,跳过过期响应:', currentPath, '→', currentRemotePath);
                     return;
@@ -222,13 +226,8 @@ class FileManager {
                 this.remoteFileCache.set(cacheKey, result.files);
                 console.log('更新远程文件缓存:', cacheKey);
 
-                // 只有在没有使用缓存时才显示文件(避免重复渲染)
-                if (!cachedFiles) {
-                    this.displayRemoteFiles(result.files, path);
-                } else {
-                    // 如果使用了缓存,静默更新(下次访问时生效)
-                    console.log('后台更新缓存成功,下次访问时生效');
-                }
+                // 总是刷新UI(包括上传/删除等操作后的新数据)
+                this.displayRemoteFiles(result.files, path);
             } else {
                 console.error('获取远程文件失败:', result.error);
                 
@@ -519,8 +518,15 @@ class FileManager {
                 progressBar.style.width = '100%';
                 transferInfo.textContent = '上传完成';
 
-                // 刷新远程文件列表
+                // 清除当前目录的缓存
                 const remotePathInput = document.getElementById('remote-path');
+                if (remotePathInput && window.currentSessionId) {
+                    const cacheKey = `${window.currentSessionId}:${remotePathInput.value}`;
+                    this.remoteFileCache.delete(cacheKey);
+                    console.log('上传完成,清除缓存:', cacheKey);
+                }
+
+                // 刷新远程文件列表
                 if (remotePathInput) {
                     this.loadRemoteFiles(remotePathInput.value);
                 }
@@ -624,8 +630,15 @@ class FileManager {
             const result = await window.api.ssh.execute(window.currentSessionId, `rm -f "${filePath}"`);
 
             if (result.success) {
-                // 刷新远程文件列表
+                // 清除当前目录的缓存
                 const remotePathInput = document.getElementById('remote-path');
+                if (remotePathInput && window.currentSessionId) {
+                    const cacheKey = `${window.currentSessionId}:${remotePathInput.value}`;
+                    this.remoteFileCache.delete(cacheKey);
+                    console.log('删除文件完成,清除缓存:', cacheKey);
+                }
+
+                // 刷新远程文件列表
                 if (remotePathInput) {
                     await this.loadRemoteFiles(remotePathInput.value);
                 }
@@ -658,8 +671,15 @@ class FileManager {
             const result = await window.api.ssh.execute(window.currentSessionId, `rm -rf "${dirPath}"`);
 
             if (result.success) {
-                // 刷新远程文件列表
+                // 清除当前目录的缓存
                 const remotePathInput = document.getElementById('remote-path');
+                if (remotePathInput && window.currentSessionId) {
+                    const cacheKey = `${window.currentSessionId}:${remotePathInput.value}`;
+                    this.remoteFileCache.delete(cacheKey);
+                    console.log('删除目录完成,清除缓存:', cacheKey);
+                }
+
+                // 刷新远程文件列表
                 if (remotePathInput) {
                     await this.loadRemoteFiles(remotePathInput.value);
                 }
@@ -701,7 +721,11 @@ class FileManager {
             if (result.success) {
                 // 刷新远程文件列表
                 const remotePathInput = document.getElementById('remote-path');
-                if (remotePathInput) {
+                if (remotePathInput && window.currentSessionId) {
+                    const cacheKey = `${window.currentSessionId}:${remotePathInput.value}`;
+                    this.remoteFileCache.delete(cacheKey);
+                    console.log('创建目录完成,清除缓存:', cacheKey);
+
                     await this.loadRemoteFiles(remotePathInput.value);
                 }
             } else {
@@ -743,7 +767,11 @@ class FileManager {
 
                 // 刷新远程文件列表
                 const remotePathInput = document.getElementById('remote-path');
-                if (remotePathInput) {
+                if (remotePathInput && window.currentSessionId) {
+                    const cacheKey = `${window.currentSessionId}:${remotePathInput.value}`;
+                    this.remoteFileCache.delete(cacheKey);
+                    console.log('上传目录完成,清除缓存:', cacheKey);
+
                     await this.loadRemoteFiles(remotePathInput.value);
                 }
             } else {
@@ -1269,11 +1297,16 @@ class FileManager {
             if (result.success) {
                 // 关闭对话框
                 document.getElementById('permissions-dialog').remove();
-                
+
                 // 刷新文件列表
                 const currentPath = document.getElementById('remote-path').value || '/';
+                if (window.currentSessionId) {
+                    const cacheKey = `${window.currentSessionId}:${currentPath}`;
+                    this.remoteFileCache.delete(cacheKey);
+                    console.log('权限修改完成,清除缓存:', cacheKey);
+                }
                 await this.loadRemoteFiles(currentPath);
-                
+
                 console.log('权限修改成功');
             } else {
                 alert(`权限修改失败: ${result.error || '未知错误'}`);

@@ -1410,11 +1410,13 @@ class SshService extends EventEmitter {
 
             const connectionKey = session.connectionKey;
 
-            // 配置选项: 设置为 false 可跳过用户名/组名查询,直接显示 UID/GID
-            // 这可以显著提升高延迟链路的性能
-            const ENABLE_USER_GROUP_LOOKUP = true;
+            // 配置选项: 可通过环境变量 SFTP_DISABLE_USER_LOOKUP=1 关闭用户名/组名查询
+            // 直接显示 UID/GID 可以显著提升高延迟链路的性能
+            const ENABLE_USER_GROUP_LOOKUP = process.env.SFTP_DISABLE_USER_LOOKUP !== '1';
 
             if (!ENABLE_USER_GROUP_LOOKUP) {
+                console.log('用户名/组名查询已禁用,直接显示UID/GID');
+
                 return fileList.map(file => ({
                     ...file,
                     owner: file.uid?.toString() || 'unknown',
@@ -1422,15 +1424,27 @@ class SshService extends EventEmitter {
                 }));
             }
 
-            // 初始化该连接的缓存
+            // 初始化该连接的缓存(带TTL)
+            const CACHE_TTL = 5 * 60 * 1000; // 5分钟过期
+            const now = Date.now();
+
             if (!this.userInfoCache.has(connectionKey)) {
                 this.userInfoCache.set(connectionKey, {
                     users: new Map(),
-                    groups: new Map()
+                    groups: new Map(),
+                    timestamp: now
                 });
             }
 
             const cache = this.userInfoCache.get(connectionKey);
+
+            // 检查缓存是否过期
+            if (now - cache.timestamp > CACHE_TTL) {
+                console.log('用户信息缓存已过期,清空:', connectionKey);
+                cache.users.clear();
+                cache.groups.clear();
+                cache.timestamp = now;
+            }
 
             // 获取所有唯一的 UID 和 GID
             const uids = [...new Set(fileList.map(f => f.uid).filter(uid => uid !== undefined))];
