@@ -58,7 +58,8 @@ function registerProtocols() {
 
 // 将命令行参数设置逻辑分离到单独的函数
 function setupCommandLineArgs() {
-    app.allowRendererProcessReuse = false;
+    // 移除已废弃的 allowRendererProcessReuse = false (Electron 28+)
+    // 保持默认的渲染进程复用以提升性能
     app.commandLine.appendSwitch('no-sandbox');
     app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors');
     app.commandLine.appendSwitch('disable-features', 'BlockInsecurePrivateNetworkRequests');
@@ -72,6 +73,7 @@ function createWindow() {
         width: 1200,
         height: 800,
         show: false, // 先不显示窗口，等最大化后再显示
+        backgroundColor: '#1e1e1e', // 设置背景色减少白屏闪烁
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
@@ -81,35 +83,38 @@ function createWindow() {
         }
     });
 
-    // 创建临时目录确保存在
-    const tempDir = path.join(os.tmpdir(), 'sshl-temp');
-    if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, {recursive: true});
+    // 根据环境选择加载方式
+    const isProduction = app.isPackaged || process.env.NODE_ENV === 'production';
+    const staticIndexPath = path.join(__dirname, 'dist', 'index.html');
+
+    if (isProduction && fs.existsSync(staticIndexPath)) {
+        // 生产模式:使用预构建的静态文件
+        console.log('生产模式:加载预构建HTML');
+        mainWindow.loadFile(staticIndexPath);
+    } else {
+        // 开发模式:使用EJS模板
+        console.log('开发模式:使用EJS模板渲染');
+        // 创建临时目录
+        const tempDir = path.join(os.tmpdir(), 'sshl-temp');
+        if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, {recursive: true});
+        }
+        tempHtmlPath = path.join(tempDir, `index-${Date.now()}.html`);
+
+        // 直接渲染并加载,无需loading页面
+        renderAndLoadInterface();
     }
-
-    // 使用系统临时目录生成临时文件
-    tempHtmlPath = path.join(tempDir, `index-${Date.now()}.html`);
-
-    // 先加载加载页面
-    mainWindow.loadFile(path.join(__dirname, 'views', 'loading.html'));
 
     // 窗口准备好后最大化并显示
     mainWindow.once('ready-to-show', () => {
         mainWindow.maximize();
         mainWindow.show();
-        
-        // 窗口显示后再初始化服务和渲染主界面
-        setTimeout(() => {
-            // 惰性加载服务 - 仅初始化配置存储
-            getConfigStore();
-            renderMainInterface();
-        }, 100);
     });
 
     // 窗口关闭时删除临时文件
     mainWindow.on('closed', () => {
         try {
-            if (fs.existsSync(tempHtmlPath)) {
+            if (tempHtmlPath && fs.existsSync(tempHtmlPath)) {
                 fs.unlinkSync(tempHtmlPath);
             }
         } catch (e) {
@@ -120,15 +125,15 @@ function createWindow() {
 }
 
 /**
- * 渲染主界面
+ * 渲染并加载界面(开发模式)
  */
-function renderMainInterface() {
-    // 使用EJS渲染HTML内容
+function renderAndLoadInterface() {
+    // 使用EJS渲染HTML内容,不再嵌入连接数据
     ejs.renderFile(
         path.join(__dirname, 'views', 'index.ejs'),
         {
             title: 'SSHL客户端',
-            connections: getConfigStore().getConnections() || [],
+            connections: [], // 空数组,由渲染进程通过IPC获取
             basePath: __dirname
         },
         {root: path.join(__dirname, 'views')},

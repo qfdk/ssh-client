@@ -355,3 +355,6 @@ dist
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,intellij+all,webstorm+all,visualstudiocode,node,yarn
 /temp.html
+
+# Build output
+/release

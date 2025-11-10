@@ -4,9 +4,12 @@
   "description": "Fast SSH client with file transfer capabilities",
   "main": "main.js",
   "author": "qfdk",
+  "type": "commonjs",
   "scripts": {
     "start": "electron .",
-    "build:mac": "NODE_ENV=production electron-builder --mac"
+    "build:renderer": "vite build && node build-renderer.js",
+    "build:mac": "pnpm run build:renderer && NODE_ENV=production electron-builder --mac",
+    "dev": "electron ."
   },
   "dependencies": {
     "ejs": "^3.1.9",
@@ -17,11 +20,23 @@
   },
   "devDependencies": {
     "electron": "^28.2.3",
-    "electron-builder": "^24.6.4"
+    "electron-builder": "^24.6.4",
+    "vite": "^5.0.0"
   },
   "build": {
     "appId": "me.qfdk.sshl",
     "productName": "SSHL",
+    "directories": {
+      "output": "release",
+      "buildResources": "."
+    },
+    "files": [
+      "**/*",
+      "!**/*.ts",
+      "!*.map",
+      "!release",
+      "dist/**/*"
+    ],
     "mac": {
       "category": "public.app-category.utilities",
       "icon": "icon.png",
